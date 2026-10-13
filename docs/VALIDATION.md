@@ -77,3 +77,7 @@ Current tests: 12 Rust runtime/SSE and 11 Edge UI; both pass. Strict token gramm
 - `app/src-tauri/target/debug/prime-fleet.exe` · 18,441,728 bytes · SHA-256 `c74a1c315507b622107a9634263de57cd479b604107cafb492d40c951ef5a251`
 - `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,488,064 bytes · SHA-256 `9eb08b924e8244212c1715ed275daf4f7e38f06adfd016ddf37777123620b5d2`
 - `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,040,141 bytes · SHA-256 `34a26c5b9bcbc75be21f3599aeeb77ea7fdfb5a0dfad39cd2f75f199739b4329`
+
+## Physical Android authentication retest
+
+Parent reports CONNECTED with the final strict-input APK. The apparent token corruption was a harness error: `adb keyevent 111` (ESC), intended to hide Gboard, inserted a trailing backtick. It was not caused by secure storage or Authorization construction. Strict token validation caught it clearly and is retained. Earlier pending-authentication notes are superseded; cold-start persistence and other device checks are not implied by this result.
