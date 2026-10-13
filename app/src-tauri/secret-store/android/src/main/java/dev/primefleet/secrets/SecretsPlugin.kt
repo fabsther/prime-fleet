@@ -20,6 +20,26 @@ import javax.crypto.spec.GCMParameterSpec
 @InvokeArg
 class SecretArgs { lateinit var id: String; var token: String? = null }
 
+// Shared by the Keystore plugin and local byte-preservation/AAD regression tests.
+internal object SecretCipher {
+    fun encrypt(id: String, token: String, key: SecretKey): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.updateAAD(id.toByteArray(Charsets.UTF_8))
+        val ciphertext = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
+        // Android GCM stores a 12-byte nonce followed by ciphertext and the 16-byte tag.
+        check(cipher.iv.size == 12)
+        return cipher.iv + ciphertext
+    }
+    fun decrypt(id: String, data: ByteArray, key: SecretKey): String {
+        require(data.size >= 28)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, data.copyOfRange(0, 12)))
+        cipher.updateAAD(id.toByteArray(Charsets.UTF_8))
+        return String(cipher.doFinal(data.copyOfRange(12, data.size)), Charsets.UTF_8)
+    }
+}
+
 @TauriPlugin
 class SecretsPlugin(private val activity: Activity) : Plugin(activity) {
     // SharedPreferences contains only AES-GCM ciphertext. The key is non-exportable.
@@ -37,21 +57,14 @@ class SecretsPlugin(private val activity: Activity) : Plugin(activity) {
     }
     @Command fun set(invoke: Invoke) = guarded(invoke) {
         val args = invoke.parseArgs(SecretArgs::class.java)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key())
-        cipher.updateAAD(args.id.toByteArray(Charsets.UTF_8))
-        val ciphertext = cipher.doFinal(requireNotNull(args.token).toByteArray(Charsets.UTF_8))
-        check(prefs.edit().putString(args.id, Base64.encodeToString(cipher.iv + ciphertext, Base64.NO_WRAP)).commit())
+        val data = SecretCipher.encrypt(args.id, requireNotNull(args.token), key())
+        check(prefs.edit().putString(args.id, Base64.encodeToString(data, Base64.NO_WRAP)).commit())
         invoke.resolve()
     }
     @Command fun get(invoke: Invoke) = guarded(invoke) {
         val args = invoke.parseArgs(SecretArgs::class.java)
         val data = Base64.decode(requireNotNull(prefs.getString(args.id, null)), Base64.NO_WRAP)
-        require(data.size >= 28)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, data.copyOfRange(0, 12)))
-        cipher.updateAAD(args.id.toByteArray(Charsets.UTF_8))
-        val token = String(cipher.doFinal(data.copyOfRange(12, data.size)), Charsets.UTF_8)
+        val token = SecretCipher.decrypt(args.id, data, key())
         invoke.resolve(JSObject().put("token", token))
     }
     @Command fun remove(invoke: Invoke) = guarded(invoke) {

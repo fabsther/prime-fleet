@@ -15,4 +15,9 @@ android {
     }
 }
 kotlin { compilerOptions { jvmTarget = JvmTarget.JVM_1_8 } }
-dependencies { implementation(project(":tauri-android")) }
+dependencies {
+    implementation(project(":tauri-android"))
+    // Same versions already used by tauri-android; no device/emulator needed.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.fasterxml.jackson.core:jackson-databind:2.15.3")
+}

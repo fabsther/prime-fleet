@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import Icon from './Icon';
-export type FleetMachine = {id:string; name:string; url:string; machineId?:string; capabilities?:string[]; studioVersion?:string; online?:boolean; error?:string; runs?:number; computer?:any};
+type AuthDiagnostics = {storageBackend:string; tokenBytes:number; tokenSha256:string; tokenFormatValid:boolean; readBackStable:boolean; saveRoundTripOk:boolean|null; authorization?:{bytes:number; sha256:string; tokenBytes:number; tokenSha256:string}|null; authorizationMatchesVault:boolean|null};
+export type FleetMachine = {authDebug?:AuthDiagnostics; id:string; name:string; url:string; machineId?:string; capabilities?:string[]; studioVersion?:string; online?:boolean; error?:string; runs?:number; computer?:any};
 export const machineColor = (i:number) => `var(--device-${['cyan','yellow','fuchsia','slate','brown'][i % 5]})`;
 export default function Machines({machines,onRefresh,onError}:{machines:FleetMachine[],onRefresh:()=>Promise<void>,onError:(error:unknown)=>void}) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const tokenInput = useRef<HTMLInputElement>(null);
   const [editing,setEditing] = useState<FleetMachine>();
   const [busy,setBusy] = useState(false);
   const [,setPreferenceRevision] = useState(0);
@@ -14,7 +16,7 @@ export default function Machines({machines,onRefresh,onError}:{machines:FleetMac
     if(busy || !dialog.current) return;
     for(const input of dialog.current.querySelectorAll('input')) if(!input.reportValidity()) return;
     setBusy(true);
-    try { await invoke('save_machine',{machine:{id:editing?.id ?? crypto.randomUUID(),name:name.trim(),url:url.trim()},token:token || null});setToken('');dialog.current?.close();await onRefresh(); }
+    try { await invoke('save_machine',{machine:{id:editing?.id ?? crypto.randomUUID(),name:name.trim(),url:url.trim()},token:(tokenInput.current?.value ?? token).trim() || null});setToken('');dialog.current?.close();await onRefresh(); }
     catch(error){onError(error);} finally{setBusy(false);}
   }
   async function remove(machine:FleetMachine) {
@@ -28,11 +30,12 @@ export default function Machines({machines,onRefresh,onError}:{machines:FleetMac
       <div className="fleet-toolbar"><span className="ps-machine-icon"><Icon name="machine" size={22}/></span><h3 className="ps-card-title">{m.name}</h3><span className={`ps-status ${m.online?'is-connected':m.error?'is-attention':''}`}>{m.online?'Connected':m.error?'Error':'Offline'}</span></div>
       <p className="ps-card-meta fleet-break">{m.url}</p><dl className="ps-kv"><dt>Studio</dt><dd>{m.studioVersion ?? 'Unknown'}</dd><dt>Runs in progress</dt><dd>{m.runs ?? 0}</dd><dt>Computer Use</dt><dd>{m.computer?.enabled ? 'Enabled' : m.capabilities?.includes('computer-use') ? 'Ready' : 'Unavailable'}</dd></dl>
       <p className="ps-help">{m.capabilities?.join(' · ') || 'No capabilities read.'}</p>{m.capabilities?.includes('sync') && <label className="ps-checkbox"><input type="checkbox" checked={localStorage.getItem(`sync:${m.id}`)==='true'} onChange={e=>{localStorage.setItem(`sync:${m.id}`,String(e.target.checked));setPreferenceRevision(n=>n+1);}}/>Token allows sync:write</label>}{m.error && <p className="ps-help fleet-error">{m.error}</p>}
+      {m.authDebug && <details className="ps-help"><summary>Auth diagnostics · debug build</summary><dl className="ps-kv fleet-break"><dt>Storage</dt><dd>{m.authDebug.storageBackend}</dd><dt>Vault token</dt><dd>{m.authDebug.tokenBytes} bytes · SHA-256 {m.authDebug.tokenSha256.slice(0,16)}…</dd><dt>Token format</dt><dd>{m.authDebug.tokenFormatValid?'Valid ASCII':'INVALID'}</dd><dt>Read-back stable</dt><dd>{m.authDebug.readBackStable?'Yes':'NO'}</dd><dt>Save round-trip</dt><dd>{m.authDebug.saveRoundTripOk===null?'Not saved in this app session':m.authDebug.saveRoundTripOk?'OK':'NO'}</dd><dt>Authorization header</dt><dd>{m.authDebug.authorization?`${m.authDebug.authorization.bytes} bytes · SHA-256 ${m.authDebug.authorization.sha256.slice(0,16)}…`:'No request built in this app session'}</dd><dt>Header token</dt><dd>{m.authDebug.authorization?`${m.authDebug.authorization.tokenBytes} bytes · SHA-256 ${m.authDebug.authorization.tokenSha256.slice(0,16)}…`:'—'}</dd><dt>Header matches vault</dt><dd>{m.authDebug.authorizationMatchesVault===null?'Not checked':m.authDebug.authorizationMatchesVault?'Yes':'NO'}</dd></dl></details>}
       <div className="fleet-toolbar"><button className="ps-text-btn" onClick={()=>edit(m)}>Edit connection</button><button className="ps-text-btn fleet-error" onClick={()=>remove(m)}>Forget</button></div>
     </article></li>)}</ul></div>
     <dialog className="ps-dialog" ref={dialog}><div><div className="fleet-toolbar"><h2 className="ps-dialog-title">{editing?'Edit connection':'Add a machine'}</h2><button type="button" className="ps-icon-btn" aria-label="Close" title="Close" onClick={()=>dialog.current?.close()}><Icon name="x"/></button></div><p className="ps-dialog-desc">Tokens stay in your system vault. Fleet sends requests without a browser Origin header.</p>
       <label className="ps-label">Name<input className="ps-input" value={name} onChange={e=>setName(e.target.value)} required maxLength={100}/></label>
       <label className="ps-label">Tailscale address<input className="ps-input" type="url" value={url} onChange={e=>setUrl(e.target.value)} required placeholder="https://pc.tailnet.ts.net"/></label>
-      <label className="ps-label">Token{editing && <small>Leave empty to keep it</small>}<input className="ps-input fleet-token-input" type="text" autoComplete="one-time-code" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={token} onChange={e=>setToken(e.target.value)} required={!editing}/></label><div className="ps-dialog-actions"><button type="button" className="ps-btn ps-btn--secondary" onClick={()=>dialog.current?.close()}>Cancel</button><button type="button" className="ps-btn ps-btn--primary" disabled={busy} onClick={save}>Save connection</button></div>
+      <label className="ps-label">Token{editing && <small>Leave empty to keep it</small>}<input ref={tokenInput} className="ps-input fleet-token-input" type="text" autoComplete="one-time-code" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={token} onChange={e=>setToken(e.target.value)} required={!editing}/></label><div className="ps-dialog-actions"><button type="button" className="ps-btn ps-btn--secondary" onClick={()=>dialog.current?.close()}>Cancel</button><button type="button" className="ps-btn ps-btn--primary" disabled={busy} onClick={save}>Save connection</button></div>
     </div></dialog></section>;
 }

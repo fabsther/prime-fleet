@@ -1,7 +1,12 @@
 use crate::sse::{Parser, SseEvent};
-use reqwest::{Client, Method, Response, Url};
+use reqwest::{
+    header::{HeaderValue, AUTHORIZATION},
+    Client, Method, Response, Url,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+#[cfg(debug_assertions)]
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::Write,
@@ -50,11 +55,50 @@ impl From<String> for ApiError {
 }
 type Result<T> = std::result::Result<T, ApiError>;
 
+#[cfg(debug_assertions)]
+#[derive(Default)]
+struct AuthObservation {
+    saved_sha256: Option<String>,
+    header: Option<HeaderDiagnostics>,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeaderDiagnostics {
+    bytes: usize,
+    sha256: String,
+    token_bytes: usize,
+    token_sha256: String,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthDiagnostics {
+    storage_backend: &'static str,
+    token_bytes: usize,
+    token_sha256: String,
+    token_format_valid: bool,
+    read_back_stable: bool,
+    // Unknown after app restart or if this process did not save the current token.
+    save_round_trip_ok: Option<bool>,
+    authorization: Option<HeaderDiagnostics>,
+    authorization_matches_vault: Option<bool>,
+}
+
+#[cfg(debug_assertions)]
+fn fingerprint(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 pub struct Backend {
     pub config_dir: PathBuf,
     pub downloads_dir: PathBuf,
     client: Client,
     pub streams: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+    #[cfg(debug_assertions)]
+    auth_observations: Mutex<HashMap<String, AuthObservation>>,
 }
 impl Backend {
     pub fn new(config_dir: PathBuf, downloads_dir: PathBuf) -> Result<Self> {
@@ -68,6 +112,8 @@ impl Backend {
             downloads_dir,
             client,
             streams: Mutex::new(HashMap::new()),
+            #[cfg(debug_assertions)]
+            auth_observations: Mutex::new(HashMap::new()),
         })
     }
     fn lock_config(&self) -> Result<std::fs::File> {
@@ -149,7 +195,10 @@ impl Backend {
             return Err(ApiError::new("validation", "Machine name already exists"));
         }
         let existing = machines.iter().find(|m| m.id == machine.id);
-        let token = token.filter(|t| !t.is_empty());
+        let token = token
+            .map(|t| normalize_token(&t).map(str::to_owned))
+            .transpose()?
+            .filter(|t| !t.is_empty());
         if (existing.is_none() || existing.is_some_and(|m| m.url != machine.url)) && token.is_none()
         {
             return Err(ApiError::new(
@@ -157,31 +206,43 @@ impl Backend {
                 "A new machine or address needs a token",
             ));
         }
-        if token
-            .as_ref()
-            .is_some_and(|t| t.len() > 8192 || t.chars().any(char::is_control))
-        {
-            return Err(ApiError::new("validation", "Invalid token format"));
-        }
         let old_token = if token.is_some() {
-            get_token(app, &machine.id).ok()
+            // Do not overwrite an existing secret if its rollback copy cannot be read.
+            if existing.is_some() {
+                Some(get_token(app, &machine.id)?)
+            } else {
+                get_token(app, &machine.id).ok()
+            }
         } else {
             None
         };
         if let Some(ref token) = token {
-            set_token(app, &machine.id, token)?;
+            replace_token_verified(
+                token,
+                old_token.as_deref(),
+                |value| set_token(app, &machine.id, value),
+                || get_token(app, &machine.id),
+                || remove_token(app, &machine.id),
+            )?;
         }
         machines.retain(|m| m.id != machine.id);
         machines.push(machine.clone());
         if let Err(error) = self.write_machines(&machines) {
             if token.is_some() {
-                if let Some(old) = old_token {
-                    let _ = set_token(app, &machine.id, &old);
-                } else {
-                    let _ = remove_token(app, &machine.id);
-                }
+                restore_token(old_token.as_deref(), &mut |value| set_token(app, &machine.id, value),
+                    &mut || get_token(app, &machine.id), &mut || remove_token(app, &machine.id))
+                    .map_err(|_| ApiError::new("secure_storage", "Metadata save failed and token rollback failed; re-enter the token before retrying"))?;
             }
             return Err(error);
+        }
+        #[cfg(debug_assertions)]
+        if let Some(token) = token {
+            if let Ok(mut observations) = self.auth_observations.lock() {
+                observations
+                    .entry(machine.id.clone())
+                    .or_default()
+                    .saved_sha256 = Some(fingerprint(token.as_bytes()));
+            }
         }
         Ok(machine)
     }
@@ -192,6 +253,56 @@ impl Backend {
         let mut machines = self.machines()?;
         machines.retain(|m| m.id != machine.id);
         self.write_machines(&machines)
+    }
+    fn authorization(&self, id: &str, token: &str) -> Result<HeaderValue> {
+        let header = authorization_header(token)?;
+        #[cfg(debug_assertions)]
+        if let Ok(mut observations) = self.auth_observations.lock() {
+            let bytes = header.as_bytes();
+            let bearer = &bytes[b"Bearer ".len()..];
+            observations.entry(id.to_owned()).or_default().header = Some(HeaderDiagnostics {
+                bytes: bytes.len(),
+                sha256: fingerprint(bytes),
+                token_bytes: bearer.len(),
+                token_sha256: fingerprint(bearer),
+            });
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = id;
+        Ok(header)
+    }
+    #[cfg(debug_assertions)]
+    pub fn auth_diagnostics(&self, app: &AppHandle, id: &str) -> Result<AuthDiagnostics> {
+        let _lock = self.lock_config()?;
+        let machine = self.machine(id)?;
+        let token = get_token(Some(app), &machine.id)?;
+        let token_format_valid = normalize_token(&token).is_ok_and(|t| !t.is_empty());
+        let token_sha256 = fingerprint(token.as_bytes());
+        let read_back_stable =
+            get_token(Some(app), &machine.id).is_ok_and(|t| t.as_bytes() == token.as_bytes());
+        let observations = self
+            .auth_observations
+            .lock()
+            .map_err(|_| ApiError::new("secure_storage", "Auth diagnostics unavailable"))?;
+        let observation = observations.get(&machine.id);
+        let header = observation.and_then(|o| o.header.clone());
+        Ok(AuthDiagnostics {
+            storage_backend: if cfg!(target_os = "android") {
+                "Android Keystore AES-GCM"
+            } else {
+                "OS credential store"
+            },
+            token_bytes: token.len(),
+            token_sha256: token_sha256.clone(),
+            token_format_valid,
+            read_back_stable,
+            save_round_trip_ok: observation
+                .and_then(|o| o.saved_sha256.as_ref().map(|s| s == &token_sha256)),
+            authorization_matches_vault: header
+                .as_ref()
+                .map(|h| h.token_bytes == token.len() && h.token_sha256 == token_sha256),
+            authorization: header,
+        })
     }
     fn request(
         &self,
@@ -214,7 +325,11 @@ impl Backend {
             _ => return Err(ApiError::new("validation", "Unsupported HTTP method")),
         };
         let token = get_token(app, &machine.id)?;
-        let mut request = self.client.request(method, url).bearer_auth(token);
+        let header = self.authorization(&machine.id, &token)?;
+        let mut request = self
+            .client
+            .request(method, url)
+            .header(AUTHORIZATION, header);
         // reqwest has no browser Origin header. Do not add one or follow redirects.
         if let Some(body) = body {
             request = request.json(&body);
@@ -268,9 +383,10 @@ impl Backend {
             let machine = self.machine(id)?;
             let url = resume_url(&machine.url, path, after)?;
             let token = get_token(Some(app), &machine.id)?;
+            let header = self.authorization(&machine.id, &token)?;
             self.client
                 .get(url)
-                .bearer_auth(token)
+                .header(AUTHORIZATION, header)
                 .header("Accept", "text/event-stream")
                 .header("Last-Event-ID", after.to_string())
         };
@@ -378,6 +494,76 @@ impl Backend {
         })?;
         Ok(json!({"path": dest.to_string_lossy(), "bytes": bytes}))
     }
+}
+
+// Android keyboards and clipboard/CLI input can add edge whitespace. Never accept
+// whitespace inside a bearer token, non-ASCII, or control bytes in an HTTP header.
+fn normalize_token(token: &str) -> Result<&str> {
+    let token = token.trim();
+    if token.len() > 8192 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(ApiError::new(
+            "validation",
+            "Token must be ASCII without internal whitespace",
+        ));
+    }
+    Ok(token)
+}
+fn authorization_header(token: &str) -> Result<HeaderValue> {
+    let token = normalize_token(token)?;
+    if token.is_empty() {
+        return Err(ApiError::new("validation", "Token is required"));
+    }
+    let mut header = HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| ApiError::new("validation", "Invalid token format"))?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+fn restore_token(
+    old: Option<&str>,
+    set: &mut impl FnMut(&str) -> Result<()>,
+    get: &mut impl FnMut() -> Result<String>,
+    remove: &mut impl FnMut() -> Result<()>,
+) -> Result<()> {
+    match old {
+        Some(token) => {
+            set(token)?;
+            if get()?.as_bytes() != token.as_bytes() {
+                return Err(ApiError::new(
+                    "secure_storage",
+                    "Token rollback read-back did not match",
+                ));
+            }
+            Ok(())
+        }
+        None => remove(),
+    }
+}
+fn replace_token_verified(
+    token: &str,
+    old: Option<&str>,
+    mut set: impl FnMut(&str) -> Result<()>,
+    mut get: impl FnMut() -> Result<String>,
+    mut remove: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let result = set(token).and_then(|_| {
+        if get()?.as_bytes() != token.as_bytes() {
+            return Err(ApiError::new(
+                "secure_storage",
+                "Token storage read-back did not match; save cancelled",
+            ));
+        }
+        Ok(())
+    });
+    if let Err(error) = result {
+        restore_token(old, &mut set, &mut get, &mut remove).map_err(|_| {
+            ApiError::new(
+                "secure_storage",
+                "Token save failed and rollback failed; re-enter the token before retrying",
+            )
+        })?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn get_token(app: Option<&AppHandle>, id: &str) -> Result<String> {
@@ -558,6 +744,114 @@ pub fn emit_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tokens_are_trimmed_at_the_boundary_and_headers_are_exact_and_sensitive() {
+        for input in [
+            "  synthetic-token_123+/= ",
+            "\r\nsynthetic-token_123+/=\t",
+            "\u{a0}synthetic-token_123+/=\u{a0}",
+        ] {
+            let normalized = normalize_token(input).unwrap();
+            assert_eq!(normalized, "synthetic-token_123+/=");
+            let request = Client::new()
+                .get("https://host/api/v1/machine")
+                .header(AUTHORIZATION, authorization_header(input).unwrap())
+                .build()
+                .unwrap();
+            let header = &request.headers()[AUTHORIZATION];
+            assert_eq!(header.as_bytes(), b"Bearer synthetic-token_123+/=");
+            assert!(header.is_sensitive());
+            assert!(!request.headers().contains_key("Origin"));
+        }
+        for invalid in [
+            "token with space",
+            "token\ttab",
+            "token\nline",
+            "nonascii-\u{e9}",
+            "zero\u{200b}width",
+            "bad\0byte",
+        ] {
+            assert!(normalize_token(invalid).is_err());
+            assert!(authorization_header(invalid).is_err());
+        }
+        assert!(normalize_token(&"x".repeat(8193)).is_err());
+        assert!(authorization_header(" ").is_err());
+        assert_eq!(normalize_token(" ").unwrap(), "");
+    }
+    #[test]
+    fn token_save_rejects_truncation_and_restores_previous_secret() {
+        use std::cell::RefCell;
+        let vault = RefCell::new(Some("old-synthetic".to_owned()));
+        for old in [Some("old-synthetic"), None] {
+            *vault.borrow_mut() = old.map(str::to_owned);
+            let result = replace_token_verified(
+                "new-synthetic",
+                old,
+                |token| {
+                    *vault.borrow_mut() = Some(
+                        if token == "new-synthetic" {
+                            "new"
+                        } else {
+                            token
+                        }
+                        .to_owned(),
+                    );
+                    Ok(())
+                },
+                || Ok(vault.borrow().clone().unwrap()),
+                || {
+                    *vault.borrow_mut() = None;
+                    Ok(())
+                },
+            );
+            assert_eq!(result.unwrap_err().code, "secure_storage");
+            assert_eq!(vault.borrow().as_deref(), old);
+        }
+        replace_token_verified(
+            "new-synthetic",
+            None,
+            |token| {
+                *vault.borrow_mut() = Some(token.to_owned());
+                Ok(())
+            },
+            || Ok(vault.borrow().clone().unwrap()),
+            || {
+                *vault.borrow_mut() = None;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(vault.borrow().as_deref(), Some("new-synthetic"));
+        let failed = replace_token_verified(
+            "synthetic",
+            Some("old"),
+            |_| Err(ApiError::new("secure_storage", "test write failure")),
+            || panic!("must not read after failed write"),
+            || Ok(()),
+        );
+        assert!(failed.unwrap_err().message.contains("rollback failed"));
+    }
+    #[cfg(debug_assertions)]
+    #[test]
+    fn diagnostics_hash_full_bytes_and_never_serialize_tokens() {
+        assert_eq!(
+            fingerprint(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let backend = Backend::new(temp.path().to_owned(), temp.path().to_owned()).unwrap();
+        let header = backend
+            .authorization("synthetic-id", "synthetic-token")
+            .unwrap();
+        let observations = backend.auth_observations.lock().unwrap();
+        let observed = observations["synthetic-id"].header.as_ref().unwrap();
+        assert_eq!(observed.sha256, fingerprint(header.as_bytes()));
+        assert_eq!(observed.token_sha256, fingerprint(b"synthetic-token"));
+        let serialized = serde_json::to_string(observed).unwrap();
+        assert!(!serialized.contains("synthetic-token"));
+        assert_eq!(observed.bytes, b"Bearer synthetic-token".len());
+    }
+
     #[test]
     fn only_public_routes_and_https_without_credentials() {
         assert_eq!(

@@ -21,6 +21,7 @@ export default function App(){
      return {machine:{...m,...info,id:m.id,url:m.url,online:true,error:undefined,runs:rs.filter((r)=>!r.endedAt&&!['completed','stopped','failed'].includes(r.status)).length,computer},projects:ps,runs:rs};
     }catch(error){return {machine:{...m,online:false,error:(error as any)?.message ?? String(error)},projects:[] as Project[],runs:[] as Run[]};}
    }));
+   await Promise.all(next.map(async(n)=>{n.machine.authDebug=await invoke<FleetMachine['authDebug']>('auth_diagnostics',{machineId:n.machine.id}).catch(()=>undefined);}));
    setMachines(next.map(n=>n.machine));setProjects(next.flatMap(n=>n.projects));setRuns(next.flatMap(n=>n.runs));
   }catch(error){onError(error);}finally{setLoading(false);}
  },[onError]);

@@ -5,6 +5,16 @@ use backend::{ApiError, Backend, Machine};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[cfg(debug_assertions)]
+#[tauri::command]
+fn auth_diagnostics(
+    app: AppHandle,
+    state: State<'_, Backend>,
+    machine_id: String,
+) -> Result<backend::AuthDiagnostics, ApiError> {
+    state.auth_diagnostics(&app, &machine_id)
+}
+
 #[tauri::command]
 fn machines(state: State<'_, Backend>) -> Result<Vec<Machine>, ApiError> {
     state.machines()
@@ -106,7 +116,7 @@ async fn download(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_fleet_secrets::init())
         .setup(|app| {
             let config = app.path().app_config_dir()?;
@@ -121,16 +131,29 @@ pub fn run() {
                 Backend::new(config, downloads).map_err(|e| std::io::Error::other(e.message))?;
             app.manage(backend);
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            machines,
-            save_machine,
-            remove_machine,
-            api,
-            stream,
-            stop_stream,
-            download
-        ])
+        });
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        machines,
+        save_machine,
+        remove_machine,
+        api,
+        stream,
+        stop_stream,
+        download,
+        auth_diagnostics
+    ]);
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        machines,
+        save_machine,
+        remove_machine,
+        api,
+        stream,
+        stop_stream,
+        download
+    ]);
+    builder
         .run(tauri::generate_context!())
         .expect("Cannot start Prime Fleet");
 }
