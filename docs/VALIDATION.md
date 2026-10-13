@@ -47,3 +47,13 @@ Paths are relative to this checkout and ignored by Git:
 - English is the current UI language; there is no full French translation table.
 
 Sync remains capability- and permission-gated. No sync state enum is guessed. API v1 has no distributed conversation lock and no route to register a missing project. App-lifetime campaign state is not restored after quitting. These are not claimed as passed acceptance criteria.
+
+## Artifact checksums (SHA-256)
+
+- `app/src-tauri/target/debug/prime-fleet.exe` · 18,334,208 bytes · `f909d73f3902810f432f24a6d71097ffe8febaf2c305cf2112702addfae8ed2c`
+- `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,451,200 bytes · `1f90cf5f89e3d24811f492731a1b33be377160bb7affdce8c5411416edf76a55`
+- `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 38,946,637 bytes · `601756d5a258aa67d5a0916e35fc29fbb2a2287fcdb0a2e08a3569997fe001ad`
+
+## Source size
+
+Own app/runtime/build glue: 2,186 physical lines (984 React/CSS/controller lines; 1,154 Rust/Keystore plugin lines; 48 Android build glue lines). Skill implementations: 611 Python lines. Tests and unchanged Studio style assets are counted separately. No vendor/generated/build output is included.

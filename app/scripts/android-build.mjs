@@ -1,7 +1,7 @@
 // Keep normal Tauri builds. On Windows without symlink rights, package the same built library by copy.
 import './android-prepare.mjs';
 import { spawn } from 'node:child_process';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 const app = fileURLToPath(new URL('../', import.meta.url));
@@ -26,5 +26,7 @@ copyFileSync(new URL('../src-tauri/target/aarch64-linux-android/debug/libprime_f
 const stripTool = join(process.env.NDK_HOME, 'toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe');
 const strip = await run(stripTool, ['--strip-debug', fileURLToPath(new URL('libprime_fleet_lib.so', jni))]);
 if (strip.code) process.exit(strip.code);
+// AGP incremental ZIPs retain deleted symbol blocks. Recreate the debug artifact.
+rmSync(new URL('../src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk', import.meta.url), { force: true });
 const gradle = await run('src-tauri/gen/android/gradlew.bat', ['-p', 'src-tauri/gen/android', ':app:assembleArm64Debug', '-x', ':app:rustBuildArm64Debug', '-PabiList=arm64-v8a', '-ParchList=arm64', '-PtargetList=aarch64']);
 process.exit(gradle.code || 0);
