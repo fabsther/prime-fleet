@@ -1,0 +1,7 @@
+node_modules/
+dist/
+target/
+app/src-tauri/gen/
+*.log
+.env*
+fleet-machines.json
