@@ -38,7 +38,7 @@ class FakeCLI(fleet.CLI):
             {"id": "b", "text": "Guest", "note": "@machine: B\n@gui\n1. Join: HUD shows host.", "done": False}]}
         self.docs = {m: {"revision": 1, "plans": [copy.deepcopy(self.plan)]} for m in ("A", "B")}
         self.info = {m: {"name": m, "machineId": m, "capabilities": ["computer-use"]} for m in ("A", "B")}
-        self.cu = {m: {"revision": 1, "supported": True, "enabled": False, "busy": False,
+        self.cu = {m: {"machineId": m, "revision": 1, "supported": True, "enabled": False, "busy": False,
                        "owner": None, "ownerHidden": False, "cleanupPending": False,
                        "cleanupFailed": False} for m in ("A", "B")}
         self.messages = {m: [{"id": "msg", "role": "assistant", "text": "Done"}] for m in ("A", "B")}
@@ -580,6 +580,151 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(first["status"], "unknown")
         self.assertEqual(second["status"], "not-dispatched")
         self.assertEqual(len(fake.posts()), 1)
+
+
+class StatusSafetyTests(unittest.TestCase):
+    def launched(self, same_machine=False):
+        fake = FakeCLI(True)
+        if same_machine:
+            same_pc(fake, gui=True)
+        manifest = launch(fake)
+        self.assertFalse(any(p.get("error") for p in manifest["players"]))
+        fake.calls.clear()
+        return fake, manifest
+
+    def read_status(self, fake, manifest):
+        before = copy.deepcopy(manifest)
+        result = control.control(fake, manifest, "status")
+        self.assertEqual(manifest, before)
+        self.assertTrue(fake.calls)
+        self.assertTrue(all(c[2] == "GET" for c in fake.calls))
+        self.assertEqual(fake.posts(), [])
+        for stored, item in zip(manifest["players"], result["players"]):
+            self.assertEqual(item["acceptedRun"], stored["run"])
+            self.assertEqual(item["requestId"], stored["requestId"])
+        return result["players"]
+
+    def test_status_global_state_machine_must_match_accepted_run(self):
+        fake, manifest = self.launched()
+        fake.cu["A"]["machineId"] = "B"
+        host, guest = self.read_status(fake, manifest)
+        self.assertEqual(host["status"], "blocked")
+        self.assertNotEqual(host["computerUseOwnershipCheck"]["status"], "verified")
+        self.assertEqual(guest["status"], "ok")
+
+    def test_status_exact_owner_verified_and_fresh_global_read(self):
+        fake, manifest = self.launched()
+        for item in self.read_status(fake, manifest):
+            self.assertEqual(item["status"], "ok")
+            self.assertEqual(item["runChecks"][0]["status"], "clear")
+            self.assertEqual(item["computerUseOwnershipCheck"]["status"], "verified")
+        self.assertEqual(sum(c[3] == "/api/v1/computer-use" for c in fake.calls), 2)
+
+    def test_status_late_old_guest_conflict_and_paginated_runs(self):
+        fake, manifest = self.launched()
+        for index in range(205):
+            other_run(fake, "B", project="outside", rid="outside" + str(index))
+        other_run(fake, "B", rid="late-guest", status="future-status")
+        host, guest = self.read_status(fake, manifest)
+        self.assertEqual(host["status"], "ok")
+        self.assertEqual(guest["status"], "blocked")
+        self.assertEqual(guest["runChecks"][0]["conflictingRunIds"], ["late-guest"])
+        self.assertTrue(any("/runs?limit=200&offset=200" in c[3] for c in fake.calls))
+
+    def test_status_same_session_different_run_or_machine_is_not_owner(self):
+        for field, value in (("runId", "other-run"), ("machineId", "other-machine"),
+                             ("projectId", "outside"), ("sessionId", "other-session")):
+            fake, manifest = self.launched()
+            fake.cu["A"]["owner"][field] = value
+            with self.subTest(field=field):
+                item = self.read_status(fake, manifest)[0]
+                self.assertEqual(item["computerUseOwnershipCheck"]["status"], "blocked")
+                self.assertEqual(item["status"], "blocked")
+
+    def test_status_hidden_missing_malformed_or_uncertain_owner_not_verified(self):
+        changes = [("ownerHidden", True), ("owner", None), ("owner", {}), ("owner", []),
+                   ("owner", "unknown"), ("owner", {"sessionId": "sr1", "projectId": "PA"}),
+                   ("enabled", False), ("cleanupPending", True), ("cleanupFailed", True),
+                   ("supported", False), ("revision", True), ("revision", -1), ("busy", "unknown")]
+        for key, value in changes:
+            fake, manifest = self.launched()
+            fake.cu["A"][key] = value
+            with self.subTest(key=key, value=value):
+                item = self.read_status(fake, manifest)[0]
+                self.assertIn(item["computerUseOwnershipCheck"]["status"], {"blocked", "unavailable"})
+                self.assertEqual(item["status"], "blocked")
+        for key in ("revision", "owner", "supported", "enabled", "busy", "ownerHidden", "cleanupPending", "cleanupFailed"):
+            fake, manifest = self.launched()
+            fake.cu["A"].pop(key)
+            with self.subTest(missing=key):
+                self.assertEqual(self.read_status(fake, manifest)[0]["computerUseOwnershipCheck"]["status"], "unavailable")
+
+    def test_status_unreadable_global_owner_and_runs_degrade_without_writes(self):
+        for endpoint in ("/api/v1/computer-use", "/api/v1/runs?limit=200&offset=0"):
+            fake, manifest = self.launched()
+            real_command = fake.command
+            def command(*args):
+                if args == ("api", "A", "GET", endpoint):
+                    fake.calls.append(args)
+                    raise fleet.FleetError("Unreadable status")
+                return real_command(*args)
+            fake.command = command
+            with self.subTest(endpoint=endpoint):
+                first, second = self.read_status(fake, manifest)
+                self.assertEqual(first["status"], "blocked")
+                self.assertIn("Unreadable status", first["error"])
+                self.assertEqual(second["status"], "ok")
+
+    def test_status_terminal_and_released_is_not_live_verified(self):
+        fake, manifest = self.launched()
+        run = fake.runs[manifest["players"][0]["run"]["id"]]
+        run.update(status="completed", endedAt="now")
+        fake.cu["A"].update(enabled=False, owner=None)
+        item = self.read_status(fake, manifest)[0]
+        self.assertEqual(item["status"], "ok")
+        self.assertEqual(item["computerUseOwnershipCheck"]["status"], "released")
+        fake.cu["A"]["cleanupPending"] = True
+        self.assertEqual(self.read_status(fake, manifest)[0]["computerUseOwnershipCheck"]["status"], "blocked")
+
+    def test_status_outside_project_ignored_two_own_players_and_dedup(self):
+        fake, manifest = self.launched(same_machine=True)
+        other_run(fake, project="outside", rid="outside")
+        # Known outside-project identities do not need to match our campaign machine/session.
+        fake.runs["outside"].pop("sessionId")
+        items = self.read_status(fake, manifest)
+        self.assertTrue(all(p["status"] == "ok" for p in items))
+        self.assertTrue(all(p["runChecks"][0]["conflictingRunIds"] == [] for p in items))
+        self.assertEqual(sum(c[3].startswith("/api/v1/runs?") for c in fake.calls), 1)
+        self.assertEqual(sum(c[3] == "/api/v1/computer-use" for c in fake.calls), 1)
+
+    def test_status_active_malformed_identity_fails_closed(self):
+        for field in ("id", "projectId", "machineId"):
+            fake, manifest = self.launched()
+            other_run(fake)
+            fake.runs["old"].pop(field)
+            with self.subTest(field=field):
+                first = self.read_status(fake, manifest)[0]
+                self.assertEqual(first["runChecks"][0]["status"], "unavailable")
+                self.assertEqual(first["status"], "blocked")
+
+    def test_status_null_session_promotes_current_but_nonnull_never_changes(self):
+        fake, manifest = self.launched()
+        stored = manifest["players"][0]["run"]
+        sid = stored["sessionId"]
+        stored["sessionId"] = None
+        first = self.read_status(fake, manifest)[0]
+        self.assertEqual(first["status"], "ok")
+        self.assertEqual(first["acceptedRun"]["sessionId"], None)
+        self.assertEqual(first["run"]["sessionId"], sid)
+        self.assertEqual(first["computerUseOwnershipCheck"]["status"], "verified")
+        self.assertTrue(any(c[3].startswith("/api/v1/sessions/" + sid + "/files") for c in fake.calls))
+        stored["sessionId"] = sid
+        fake.runs[stored["id"]]["sessionId"] = "different-session"
+        fake.cu["A"]["owner"]["sessionId"] = "different-session"
+        first = self.read_status(fake, manifest)[0]
+        self.assertEqual(first["status"], "blocked")
+        self.assertEqual(first["run"]["sessionId"], sid)
+        self.assertNotEqual(first["computerUseOwnershipCheck"]["status"], "verified")
 
 
 if __name__ == "__main__":

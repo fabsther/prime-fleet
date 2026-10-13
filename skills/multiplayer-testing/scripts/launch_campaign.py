@@ -85,6 +85,8 @@ def computer_state(cli, machine):
     flags = ("supported", "enabled", "busy", "ownerHidden", "cleanupPending", "cleanupFailed")
     if (not isinstance(state, dict) or any(type(state.get(key)) is not bool for key in flags) or "owner" not in state
             or type(state.get("revision")) is not int or state["revision"] < 0
+            or not isinstance(state.get("machineId"), str) or not state["machineId"]
+            or (machine.get("machineId") is not None and state["machineId"] != machine["machineId"])
             or (state["owner"] is not None and (not isinstance(state["owner"], dict) or not state["owner"]))):
         raise FleetError("Computer Use ownership state is unknown. Never take it over.")
     return state
