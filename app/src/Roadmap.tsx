@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { FormEvent, Dispatch, SetStateAction } from 'react';
-import { api, errorText, projectPath as path, launchCampaign as launchCampaignWork, launchStep, stopCampaign, messageCampaign } from './api';
-import type { CampaignPlayerResult } from './api';
+import { api, errorText, projectPath as path, launchCampaign as launchCampaignWork, launchStep, stopCampaign, messageCampaign, campaignActivity, refreshCampaignPlayer, assertCampaignReplaceable } from './api';
+import type { CampaignPlayerResult, WorkAccepted } from './api';
 import { assignMachine, campaignRequestId, flattenSteps, isActiveRun, newCampaignId, parseMarkup, resolveMachine, validateCampaign } from './logic';
 import type { CampaignPlayer, ComputerState, Machine, Plan, Roadmap as Document, Run, Step } from './logic';
 import Icon from './Icon';
@@ -18,7 +18,7 @@ export type RoadmapProps = {
   campaign?: Campaign; onCampaign: Dispatch<SetStateAction<Campaign | undefined>>;
 };
 type Editor = { kind: 'plan' | 'step' | 'journal'; planId?: string; stepId?: string; parentId?: string; title: string; note: string; status: string; revision: number };
-type Player = { ambiguous?: boolean; key: string; player: CampaignPlayer; machineId: string; projectId: string; requestId: string; status: string; run?: Run; computer?: ComputerState; error?: string; notice?: string; sent?: boolean };
+type Player = { accepted?: WorkAccepted; safety?: CampaignPlayerResult['safety']; conflictRunIds?: string[]; ambiguous?: boolean; key: string; player: CampaignPlayer; machineId: string; projectId: string; requestId: string; status: string; run?: Run; computer?: ComputerState; error?: string; notice?: string; sent?: boolean };
 export type Campaign = { launching?: boolean; id: string; planId: string; machineId: string; projectId: string; players: Player[] };
 
 export default function Roadmap({ machineId, projectId, machines, projectCopies, onRun, onError, campaign, onCampaign: setCampaign }: RoadmapProps) {
@@ -31,6 +31,11 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
   const [editor, setEditor] = useState<Editor>();
   const [broadcast, setBroadcast] = useState('');
   const lock = useRef(false);
+  const campaignRef = useRef(campaign);
+  campaignRef.current = campaign;
+  const safetyReads = useRef(new Map<string, Promise<void>>());
+  const activityReads = useRef(new Map<string, ReturnType<typeof campaignActivity>>());
+  const lastSafetyRead = useRef(new Map<string, number>());
   const dialog = useRef<HTMLDialogElement>(null);
   const scope = useRef('');
   const documentScope = useRef('');
@@ -113,11 +118,12 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
       await refresh();
     } catch (error) { try { await refresh(); } catch { /* No write retry. */ } throw error; }
   }
-  function updatePlayer(key: string, values: Partial<Player>) {
-    setCampaign(current => current ? { ...current, players: current.players.map(p => p.key === key ? { ...p, ...values } : p) } : current);
+  function updatePlayer(key: string, values: Partial<Player>, campaignId = campaign?.id) {
+    setCampaign(current => current && current.id === campaignId ? { ...current, players: current.players.map(p => p.key === key ? { ...p, ...values } : p) } : current);
   }
   async function launchCampaign(plan: Plan) {
-    if (campaign && (campaign.launching || campaign.players.some(p => !p.run ? p.ambiguous : isActiveRun(p.run)))) throw new Error('Stop or resolve the current campaign before launching another.');
+    const previous = campaignRef.current;
+    if (previous) await assertCampaignReplaceable(previous.players.map(resultFor), !!previous.launching);
     const id = newCampaignId();
     const validation = validateCampaign(plan, fleet, id);
     if (validation.errors.length) throw new Error(validation.errors.join('\n'));
@@ -132,23 +138,48 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
     const onUpdate = (row: CampaignPlayerResult) => {
       const run = row.accepted && { ...row.accepted.run, sessionId: row.accepted.sessionId ?? row.accepted.run.sessionId };
       updatePlayer(row.player.step.id, {
-        status: run ? run.status : row.status, ...(run ? { run } : {}),
+        status: row.safety === 'degraded' || row.safety === 'blocked' ? row.safety : run ? run.status : row.status, ...(run ? { run, accepted: row.accepted } : {}),
         computer: row.computer, error: row.error, ambiguous: row.ambiguous,
-        sent: row.sent,
-        notice: row.computerStatus === 'manual' ? 'Enable Computer Use manually in Studio. The player waits up to 2 minutes.' : row.accepted?.linkWarning ? 'Run accepted, but its Roadmap link could not be saved.' : undefined,
-      });
+        sent: row.sent, safety: row.safety, conflictRunIds: row.conflictRunIds,
+        notice: row.notice ?? (row.computerStatus === 'manual' && !row.error ? 'Enable Computer Use manually in Studio. The player waits up to 2 minutes.' : row.accepted?.linkWarning ? 'Run accepted, but its Roadmap link could not be saved.' : undefined),
+      }, id);
       if (run && !notified.has(run.id)) { notified.add(run.id); onRun(row.player.machine.id, run); }
     };
     try { await launchCampaignWork({ project: fleetProject, plan, machines: fleet, campaignId: id, sourceMachine: fleet.find(m => m.id === machineId), onUpdate }); }
     finally { setCampaign(current => current ? { ...current, launching: false } : current); }
     await refresh();
   }
-  async function refreshPlayer(player: Player) {
+  async function refreshPlayer(player: Player, background = false) {
     if (!player.run) return;
-    const run: Run = await api(player.machineId, 'GET', `/api/v1/runs/${encodeURIComponent(player.run.id)}`);
-    const computer = player.player.gui && machines.find(m => m.id === player.machineId)?.capabilities?.includes('computer-use')
-      ? await api(player.machineId, 'GET', `/api/v1/computer-use?${run.sessionId ? `sessionId=${encodeURIComponent(run.sessionId)}` : `runId=${encodeURIComponent(run.id)}`}`) : undefined;
-    updatePlayer(player.key, { run, status: run.status, ...(computer ? { computer } : {}) });
+    const current = campaignRef.current;
+    if (!current) return;
+    const key = `${current.id}/${player.machineId}/${player.run.id}`;
+    const existing = safetyReads.current.get(key);
+    if (existing) return existing;
+    if (background && (current.launching || Date.now() - (lastSafetyRead.current.get(key) ?? 0) < 15000)) return;
+    const work = (async () => {
+      const rows = current.players.map(resultFor);
+      const activityKey = `${current.id}/${player.machineId}/${player.projectId}`;
+      let activity = activityReads.current.get(activityKey);
+      if (!activity) {
+        activity = campaignActivity(player.player.machine, player.projectId, rows);
+        activityReads.current.set(activityKey, activity);
+        void activity.finally(() => activityReads.current.delete(activityKey)).catch(() => undefined);
+      }
+      try {
+        const row = await refreshCampaignPlayer(resultFor(player), rows, api, await activity);
+        const run = row.accepted?.run;
+        updatePlayer(player.key, { ...(run ? { run, accepted: row.accepted } : {}), computer: row.computer,
+          status: row.safety === 'degraded' ? 'degraded' : run?.status ?? player.status,
+          error: row.error, notice: row.notice, safety: row.safety, conflictRunIds: row.conflictRunIds }, current.id);
+      } catch (error) {
+        updatePlayer(player.key, { status: 'degraded', safety: 'degraded', notice: undefined,
+          error: `Campaign safety check failed: ${errorText(error)}. No retry or takeover was attempted.` }, current.id);
+      }
+    })();
+    safetyReads.current.set(key, work);
+    lastSafetyRead.current.set(key, Date.now());
+    try { await work; } finally { safetyReads.current.delete(key); }
   }
   const activeCampaignRuns = campaign?.players.filter(p => p.run && isActiveRun(p.run)) ?? [];
   const activeCampaignKey = activeCampaignRuns.map(p => `${p.machineId}/${p.run!.id}`).sort().join(',');
@@ -164,7 +195,10 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
       const events = await listen<any>('fleet-stream', ({ payload }) => {
         if (cancelled) return;
         const player = activeCampaignRuns.find(p => p.machineId === payload.machineId && payload.path === `/api/v1/runs/${p.run!.id}/events`);
-        if (player && payload.event?.status) updatePlayer(player.key, { status: payload.event.status });
+        if (player && payload.event?.status) {
+          if (campaignRef.current?.players.find(p => p.key === player.key)?.safety !== 'degraded') updatePlayer(player.key, { status: payload.event.status });
+          void refreshPlayer(player, true).catch(error => updatePlayer(player.key, { error: errorText(error) }));
+        }
         if (player && /finished|completed|failed|stopped|ended/.test(payload.event?.kind ?? '')) void refreshPlayer(player).catch(error => updatePlayer(player.key, { error: errorText(error) }));
       });
       cleanup.push(end, events);
@@ -177,11 +211,17 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
       }));
     }
     if (activeCampaignRuns.length) void follow().catch(onError);
-    return () => { cancelled = true; cleanup.forEach(fn => fn()); streams.forEach(streamId => { void invoke('stop_stream', { streamId }); }); };
+    // SSE follows our runs only. A dormant unrelated session can resume without any own-run event.
+    // One activity page sequence per machine/project is shared by concurrent player checks.
+    const timer = activeCampaignRuns.length ? window.setInterval(() => {
+      for (const player of campaignRef.current?.players ?? []) if (player.run && isActiveRun(player.run)) void refreshPlayer(player, true);
+    }, 30000) : undefined;
+    return () => { cancelled = true; window.clearInterval(timer); cleanup.forEach(fn => fn()); streams.forEach(streamId => { void invoke('stop_stream', { streamId }); }); };
   }, [activeCampaignKey]);
   function resultFor(player: Player): CampaignPlayerResult {
     return { campaignId: campaign!.id, player: player.player, requestId: player.requestId, status: 'accepted',
-      accepted: player.run ? { accepted: true, queued: false, run: player.run, sessionId: player.run.sessionId,
+      ambiguous: player.ambiguous, safety: player.safety, conflictRunIds: player.conflictRunIds, computer: player.computer,
+      accepted: player.accepted ? { ...player.accepted, run: player.run ?? player.accepted.run } : player.run ? { accepted: true, queued: false, run: player.run, sessionId: player.run.sessionId,
         requestId: player.requestId, machineId: player.run.machineId, projectId: player.projectId } : undefined };
   }
   async function stopPlayer(player: Player) {
@@ -247,12 +287,16 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
     {campaign && <section className="ps-pane-section fleet-campaign" aria-label={t("Campaign panel")}>
       <div className="ps-plan-head"><h3 className="ps-heading">{t("Campaign")}</h3><span className="ps-inline-count">{campaign.id}</span></div>
       <p className="ps-help">{t("Results do not check steps. Read each report, then validate the checklist.")}</p>
+      <p className="ps-help">{localError("Safety checks are snapshots, not a distributed lock. Later resumes can still race. Active players are checked every 30 seconds. Conflicts block further dispatch; accepted runs are kept. No unrelated run is stopped and no Computer Use takeover is attempted.")}</p>
       {campaign.players.map(player => <article className="fleet-campaign-player" key={player.key}>
         <div className="ps-plan-head"><strong>{player.player.index}. {player.player.step.text}</strong><span className={`ps-status ${player.run && isActiveRun(player.run) ? 'is-working' : ''}`}>{stateLabel(player.status)}</span></div>
-        <p className="ps-help">{player.player.machine.name}{player.player.gui ? ` · ${t("Computer Use: {status}",{status:t(player.computer?.enabled ? "Enabled" : player.computer?.ownerHidden || player.computer?.owner ? "Other owner" : "Off")})}` : ''}</p>
-        {player.notice && <p className="ps-help">{localError(player.notice)}</p>}
+        <p className="ps-help">{player.player.machine.name}{player.player.gui ? ` · ${t("Computer Use: {status}",{status:localError(player.safety === 'degraded' || player.computer?.ownerHidden ? "Ownership unverified" : player.computer?.enabled ? "Enabled" : player.computer?.owner ? "Other owner" : "Off")})}` : ''}</p>
+        {player.notice && <p className="ps-help" role="status">{localError(player.notice)}</p>}
+        {!!player.conflictRunIds?.length && <p className="ps-help">{localError("Conflicting run IDs:")} <code>{player.conflictRunIds.join(', ')}</code></p>}
         {player.error && <p className="fleet-player-error" role="alert">{localError(player.error)}{player.ambiguous && !player.run ? ` ${t("Acceptance is unknown. Inspect Studio runs; do not relaunch blindly.")}` : ''}</p>}
-        <code className="fleet-report-path">outputs/multitest/{campaign.id}/player-{player.player.index}.md</code>{player.ambiguous && <p className="ps-help">{t("Request ID:")} <code>{player.requestId}</code></p>}
+        <code className="fleet-report-path">outputs/multitest/{campaign.id}/player-{player.player.index}.md</code>
+        {player.accepted && <p className="ps-help">{localError("Accepted run ID:")} <code>{player.accepted.run.id}</code> · {localError("Session ID:")} <code>{player.accepted.sessionId ?? player.run?.sessionId ?? localError("Not assigned yet")}</code> · {t("Request ID:")} <code>{player.accepted.requestId}</code></p>}
+        {player.ambiguous && <p className="ps-help">{t("Request ID:")} <code>{player.requestId}</code></p>}
         <div className="fleet-roadmap-actions"><button className="ps-text-btn" disabled={!player.run} onClick={() => { if (player.run) onRun(player.machineId, player.run); }}>{t("Open conversation")}</button><button className="ps-text-btn" disabled={busy || !player.run} onClick={() => void action(() => forPlayers(refreshPlayer, [player]))}>{t("Refresh")}</button><button className="ps-text-btn" disabled={busy || !player.run} onClick={() => { if (window.confirm(t("Stop {step} and revoke only its Computer Use?",{step:player.player.step.text}))) void action(() => forPlayers(stopPlayer, [player])); }}>{t("Stop player")}</button></div>
       </article>)}
       <label className="ps-label" htmlFor="campaign-message">{t("Message to players")}</label><textarea id="campaign-message" className="ps-input" rows={2} maxLength={262144} value={broadcast} onChange={event => setBroadcast(event.target.value)} placeholder={t("Give all active players an instruction.")} />

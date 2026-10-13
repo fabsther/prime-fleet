@@ -43,7 +43,15 @@ export interface FileRef { id: string; name?: string; path?: string; [key: strin
 export const listFiles = (machine: string, session: string, transport: Api = api) => pages<FileRef>(machine, `${sessionPath(session)}/files`, transport);
 export const stopRun = (machine: string, run: string, transport: Api = api) => transport(machine, 'POST', `${runPath(run)}/stop`, {});
 export const sendMessage = (machine: string, session: string, message: string, mode: 'steer' | 'follow_up' = 'steer', transport: Api = api) => transport(machine, 'POST', `${sessionPath(session)}/messages`, { requestId: newRequestId(), mode, message });
-export const getComputerUse = (machine: string, transport: Api = api): Promise<ComputerState> => transport(machine, 'GET', '/api/v1/computer-use');
+export const getComputerUse = async (machine: string, transport: Api = api): Promise<ComputerState> => {
+  const state = await transport(machine, 'GET', '/api/v1/computer-use');
+  const flags = ['supported', 'enabled', 'busy', 'ownerHidden', 'cleanupPending', 'cleanupFailed'];
+  if (!state || typeof state !== 'object' || flags.some(key => typeof state[key] !== 'boolean') ||
+    !Number.isInteger(state.revision) || state.revision < 0 || typeof state.machineId !== 'string' || !state.machineId.trim() ||
+    !('owner' in state) || state.owner !== null && (typeof state.owner !== 'object' || Array.isArray(state.owner)))
+    throw new Error('Computer Use state could not be verified. Inspect Studio before continuing.');
+  return state;
+};
 export type ComputerMutation = { enabled: boolean; expectedRevision: number } & ({ runId: string; sessionId?: never } | { sessionId: string; runId?: never });
 export const setComputerUse = (machine: string, body: ComputerMutation, transport: Api = api): Promise<ComputerState> => transport(machine, 'POST', '/api/v1/computer-use', body);
 export const syncProject = (machine: Machine, projectId: string, sessionId?: string, transport: Api = api): Promise<unknown> => {
@@ -141,7 +149,7 @@ export async function continueConversation(options: ContinueOptions, transport: 
   return { status: 'started', run };
 }
 
-export async function launchStep(options: { project: FleetProject; planId: string; stepId: string; machine: Machine; instructions?: string; requestId?: string; expectedStep?: CampaignPlayer['step']; expectedSummary?: string; onSending?: () => void }, transport: Api = api): Promise<WorkAccepted> {
+export async function launchStep(options: { project: FleetProject; planId: string; stepId: string; machine: Machine; instructions?: string; requestId?: string; expectedStep?: CampaignPlayer['step']; expectedSummary?: string; beforeWork?: () => Promise<void>; onSending?: () => void }, transport: Api = api): Promise<WorkAccepted> {
   const { project, planId, stepId, machine } = options;
   if (!isOnline(machine)) throw new Error(`${machine.name}: machine is offline.`);
   const copy = projectCopy(project, machine);
@@ -159,20 +167,87 @@ export async function launchStep(options: { project: FleetProject; planId: strin
   if (options.expectedStep && (step.text !== options.expectedStep.text || (step.note ?? '') !== (options.expectedStep.note ?? ''))) throw new Error('Player instructions changed. Review the campaign before launching.');
   const markup = parseMarkup(step.note);
   if (markup.assignments.length !== 1 || resolveMachine(markup.machine, [machine])?.id !== machine.id) throw new Error('Step must be assigned to this machine.');
+  await options.beforeWork?.();
   options.onSending?.();
   return workRoadmap(machine.id, copy.id, { requestId: options.requestId ?? newRequestId(), expectedRevision: roadmap.revision,
     targets: [{ kind: 'plan', planId, stepId }], ...(options.instructions === undefined ? {} : { instructions: options.instructions }) }, transport);
 }
 
 export interface CampaignPlayerResult {
-  player: CampaignPlayer; campaignId: string; requestId: string; sent?: boolean; ambiguous?: boolean; status: 'pending' | 'launching' | 'accepted' | 'error' | 'stopped';
+  player: CampaignPlayer; campaignId: string; requestId: string; sent?: boolean; ambiguous?: boolean; status: 'pending' | 'launching' | 'accepted' | 'error' | 'stopped' | 'blocked' | 'degraded';
   accepted?: WorkAccepted; computer?: ComputerState; computerStatus?: 'manual' | 'authorized' | 'revoked'; error?: string;
+  safety?: 'healthy' | 'blocked' | 'degraded' | 'manual'; notice?: string; conflictRunIds?: string[];
 }
 export interface CampaignOptions {
   project: FleetProject; plan: Plan; machines: Machine[]; campaignId?: string; sourceMachine?: Machine;
   onUpdate?: (result: CampaignPlayerResult) => void;
 }
 const controlBlocked = (state: ComputerState) => state.owner !== null || state.ownerHidden || state.enabled || state.busy || state.cleanupPending || state.cleanupFailed;
+const ownsComputer = (state: ComputerState, accepted: WorkAccepted) => {
+  // Grants target a run, not a session. A session-only owner cannot prove that an old
+  // run in the same conversation did not resume. Legacy stop cleanup stays separate.
+  return !state.ownerHidden && state.machineId === accepted.machineId && state.owner?.projectId === accepted.projectId &&
+    state.owner.runId === accepted.run.id;
+};
+// IDs from the API are canonical. Never exclude a run by campaign label, session or project name.
+export async function campaignActivity(machine: Machine, projectId: string, rows: CampaignPlayerResult[], transport: Api = api) {
+  const active = (await listRuns(machine.id, transport)).filter(isActiveRun);
+  const validId = (id: unknown): id is string => typeof id === 'string' && id.trim().length > 0;
+  const identityUnknown = active.filter(run => !validId(run.id) || !validId(run.machineId) || run.machineId !== (machine.machineId ?? machine.id));
+  const runs = active.filter(run => validId(run.id) && validId(run.machineId) && run.machineId === (machine.machineId ?? machine.id));
+  const own = new Set(rows.filter(row => row.player.machine.id === machine.id && row.accepted?.projectId === projectId &&
+    belongsToMachine(row.accepted.machineId, machine) && belongsToMachine(row.accepted.run.machineId, machine)).map(row => row.accepted!.run.id));
+  const conflictRunIds = runs.filter(run => run.projectId === projectId && !own.has(run.id)).map(run => run.id);
+  const unknown = runs.filter(run => !validId(run.projectId) && !own.has(run.id)).map(run => run.id);
+  const error = conflictRunIds.length ? `Other active runs in this project: ${conflictRunIds.join(', ')}. Further dispatch is blocked. No unrelated run was stopped.`
+    : identityUnknown.length ? `Active run identities do not match this machine: ${identityUnknown.map(run => run.id || '(missing run ID)').join(', ')}. Project safety cannot be verified. Further dispatch is blocked.`
+    : unknown.length ? `Active runs have unknown project IDs: ${unknown.join(', ')}. Project safety cannot be verified. Further dispatch is blocked.` : undefined;
+  return { conflictRunIds, error };
+}
+export async function refreshCampaignPlayer(previous: CampaignPlayerResult, rows: CampaignPlayerResult[], transport: Api = api,
+  activity?: Awaited<ReturnType<typeof campaignActivity>>): Promise<CampaignPlayerResult> {
+  const row = { ...previous }, accepted = row.accepted;
+  if (!accepted) return row;
+  try {
+    const run = await getRun(row.player.machine.id, accepted.run.id, transport);
+    if (run.id !== accepted.run.id || run.machineId !== accepted.machineId || run.projectId !== accepted.projectId) throw new Error('Accepted run identity could not be verified. Inspect Studio before continuing.');
+    row.accepted = { ...accepted, run: { ...run, sessionId: run.sessionId ?? accepted.sessionId ?? accepted.run.sessionId } };
+    const fresh = activity ?? await campaignActivity(row.player.machine, accepted.projectId, rows, transport);
+    row.conflictRunIds = fresh.conflictRunIds;
+    let issue = fresh.error;
+    if (row.player.gui && hasCapability(row.player.machine, 'computer-use')) {
+      // A session-filtered view can hide another global owner; always use the global route.
+      row.computer = await getComputerUse(row.player.machine.id, transport);
+      if (row.computer.ownerHidden) issue ??= 'Computer Use owner is hidden. Ownership cannot be verified. No takeover was attempted.';
+      else if (row.computer.cleanupPending || row.computer.cleanupFailed) issue ??= 'Computer Use cleanup is pending or failed. Ownership cannot be verified.';
+      else if (row.computer.owner && !ownsComputer(row.computer, accepted)) issue ??= 'Computer Use belongs to another run or session. No takeover was attempted.';
+      else if (isActiveRun(run) && row.computer.supported && (!row.computer.enabled || !ownsComputer(row.computer, accepted))) issue ??= 'Computer Use authorization is not confirmed. Inspect Studio before continuing.';
+      else if (!row.computer.supported && controlBlocked(row.computer)) issue ??= 'Computer Use is owned, busy or awaiting cleanup. No takeover was attempted.';
+      else if (!row.computer.supported) row.computerStatus = 'manual';
+    }
+    row.safety = issue ? 'degraded' : row.player.gui && (!row.computer || !row.computer.supported) ? 'manual' : 'healthy';
+    row.status = issue ? 'degraded' : isActiveRun(run) ? 'accepted' : 'stopped';
+    row.error = issue;
+    row.notice = issue ? undefined : row.safety === 'manual' ? 'Enable Computer Use manually in Studio. The player waits up to 2 minutes.'
+      : row.player.gui && isActiveRun(run) ? 'Project activity and Computer Use ownership verified.' : 'No other active runs in this project at the last check.';
+  } catch (error) {
+    row.status = 'degraded'; row.safety = 'degraded'; row.notice = undefined;
+    row.error = `Campaign safety check failed: ${errorText(error)}. No retry or takeover was attempted.`;
+  }
+  return row;
+}
+// Keep the old manifest and its cleanup controls until all accepted work and leases are resolved.
+export async function assertCampaignReplaceable(rows: CampaignPlayerResult[], launching: boolean, transport: Api = api): Promise<void> {
+  const blocked = () => new Error('Stop or resolve the current campaign before launching another.');
+  if (launching || rows.some(row => row.ambiguous || row.accepted && isActiveRun(row.accepted.run))) throw blocked();
+  const guiMachines = [...new Map(rows.filter(row => row.accepted && row.player.gui && hasCapability(row.player.machine, 'computer-use'))
+    .map(row => [row.player.machine.id, row.player.machine])).values()];
+  // Terminal runs can still hold Computer Use. A failed/hidden ownership read is not a release.
+  for (const machine of guiMachines) {
+    const state = await getComputerUse(machine.id, transport);
+    if (state.machineId !== (machine.machineId ?? machine.id) || controlBlocked(state)) throw blocked();
+  }
+}
 export async function launchCampaign(options: CampaignOptions, transport: Api = api): Promise<CampaignPlayerResult[]> {
   const { project, plan, machines } = options, campaignId = options.campaignId ?? newCampaignId();
   const validation = validateCampaign(plan, machines, campaignId);
@@ -181,50 +256,85 @@ export async function launchCampaign(options: CampaignOptions, transport: Api = 
   if (options.sourceMachine) projectCopy(project, options.sourceMachine);
   const rows: CampaignPlayerResult[] = validation.players.map(player => ({ player, campaignId, requestId: campaignRequestId(campaignId, player.step.id), status: 'pending' }));
   const update = (row: CampaignPlayerResult) => options.onUpdate?.({ ...row });
-  // Complete every global ownership precheck before launching any player.
-  await Promise.all(rows.filter(row => row.player.gui).map(async row => {
-    if (!hasCapability(row.player.machine, 'computer-use')) { row.computerStatus = 'manual'; update(row); return; }
+  const targets = [...new Map(rows.map(row => [row.player.machine.id, row.player.machine])).values()];
+  const checkActivity = async (machine: Machine) => {
+    const activity = await campaignActivity(machine, projectCopy(project, machine).id, rows, transport);
+    if (activity.error) throw new Error(`${machine.name}: ${activity.error}`);
+  };
+  // Read ALL target activity and global ownership before ANY write (including sync).
+  const preflight = await Promise.allSettled(targets.map(checkActivity));
+  const ownership = await Promise.allSettled(rows.filter(row => row.player.gui).map(async row => {
+    if (!hasCapability(row.player.machine, 'computer-use')) { row.computerStatus = 'manual'; return; }
     row.computer = await getComputerUse(row.player.machine.id, transport);
     if (controlBlocked(row.computer)) throw new Error(`${row.player.machine.name}: Computer Use is owned, busy or awaiting cleanup. Cancel or release it in Studio.`);
-    if (!row.computer.supported) { row.computerStatus = 'manual'; update(row); return; }
+    if (!row.computer.supported) row.computerStatus = 'manual';
   }));
+  const failures = [...preflight, ...ownership].filter(result => result.status === 'rejected');
+  if (failures.length) {
+    const error = failures.map(result => errorText(result.reason)).join('\n');
+    for (const row of rows) { row.status = 'blocked'; row.safety = 'blocked'; row.error = error; update(row); }
+    throw new Error(error);
+  }
   if (options.sourceMachine && canSync(options.sourceMachine)) await syncProject(options.sourceMachine, projectCopy(project, options.sourceMachine).id, undefined, transport);
-  const machineIds = [...new Set(rows.map(row => row.player.machine.id))];
-  await Promise.all(machineIds.map(async id => {
-    const assigned = rows.filter(row => row.player.machine.id === id), machine = assigned[0].player.machine;
-    try {
-      const copy = projectCopy(project, machine);
-      if (canSync(machine) && machine.id !== options.sourceMachine?.id) await syncProject(machine, copy.id, undefined, transport);
-    } catch (error) {
-      for (const row of assigned) { row.status = 'error'; row.error = errorText(error); update(row); }
-      return;
-    }
-    for (const row of assigned) {
-      row.status = 'launching'; update(row);
-      try {
-        row.accepted = await launchStep({ project, planId: plan.id, stepId: row.player.step.id, machine,
-          instructions: buildCampaignHeader(campaignId, row.player, validation.players, plan.summary),
-          requestId: row.requestId, expectedStep: row.player.step, expectedSummary: plan.summary ?? '', onSending: () => { row.sent = true; update(row); } }, transport);
-        row.accepted = { ...row.accepted, run: { ...row.accepted.run, sessionId: row.accepted.sessionId ?? row.accepted.run.sessionId } };
-        row.status = 'accepted'; update(row);
-        if (row.player.gui && row.computerStatus !== 'manual') {
-          const current = await getComputerUse(machine.id, transport);
-          if (controlBlocked(current)) throw new Error('Computer Use ownership changed. No takeover was attempted.');
-          row.computer = await setComputerUse(machine.id, { enabled: true, expectedRevision: current.revision, runId: row.accepted.run.id }, transport);
-          row.computerStatus = 'authorized'; update(row);
-        }
-      } catch (error) {
-        // Preserve accepted run IDs after an authorization error: never relaunch them.
-        if (row.accepted && row.player.gui && row.computerStatus !== 'manual' && needsReread(error)) {
-          row.computer = await getComputerUse(machine.id, transport).catch(() => row.computer);
-        }
-        row.status = 'error'; row.error = errorText(error);
-        const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : undefined;
-        row.ambiguous = !!row.sent && !row.accepted && (status === undefined || status >= 500);
-        update(row);
-      }
-    }
+  const syncFailures = new Map<string, string>();
+  await Promise.all(targets.map(async machine => {
+    try { if (canSync(machine) && machine.id !== options.sourceMachine?.id) await syncProject(machine, projectCopy(project, machine).id, undefined, transport); }
+    catch (error) { syncFailures.set(machine.id, errorText(error)); }
   }));
+  let blocked: string | undefined;
+  // Serialize dispatch: a raced conflict/uncertain acceptance blocks every not-yet-sent player.
+  // API v1 has no distributed lock; these snapshots cannot eliminate a later Studio resume race.
+  for (const row of rows) {
+    const machine = row.player.machine;
+    if (blocked || syncFailures.has(machine.id)) {
+      row.status = 'blocked'; row.safety = 'blocked'; row.error = blocked ?? syncFailures.get(machine.id); update(row); continue;
+    }
+    row.status = 'launching'; update(row);
+    try {
+      row.accepted = await launchStep({ project, planId: plan.id, stepId: row.player.step.id, machine,
+        instructions: buildCampaignHeader(campaignId, row.player, validation.players, plan.summary),
+        requestId: row.requestId, expectedStep: row.player.step, expectedSummary: plan.summary ?? '',
+        beforeWork: async () => {
+          try { await checkActivity(machine); }
+          catch (error) { blocked = errorText(error); throw error; }
+        }, onSending: () => { row.sent = true; update(row); } }, transport);
+      row.status = 'accepted'; update(row);
+      const canonicalMachine = machine.machineId ?? machine.id, localProject = projectCopy(project, machine).id;
+      if (typeof row.accepted.run.id !== 'string' || !row.accepted.run.id.trim() || row.accepted.machineId !== canonicalMachine || row.accepted.run.machineId !== canonicalMachine ||
+        row.accepted.projectId !== localProject || row.accepted.run.projectId !== localProject) throw new Error('Accepted run identity could not be verified. Inspect Studio before continuing.');
+      // Preserve accepted run/session/request identities even if the next read or authorization fails.
+      const activity = await campaignActivity(machine, projectCopy(project, machine).id, rows, transport);
+      row.conflictRunIds = activity.conflictRunIds;
+      if (activity.error) throw new Error(activity.error);
+      if (row.player.gui && hasCapability(machine, 'computer-use')) {
+        const current = await getComputerUse(machine.id, transport);
+        row.computer = current;
+        if (controlBlocked(current)) throw new Error('Computer Use ownership changed. No takeover was attempted.');
+        if (!current.supported) row.computerStatus = 'manual';
+        else if (row.computerStatus !== 'manual') {
+          try {
+            await setComputerUse(machine.id, { enabled: true, expectedRevision: current.revision, runId: row.accepted.run.id }, transport);
+          } catch (error) {
+            row.computer = await getComputerUse(machine.id, transport).catch(() => undefined);
+            throw error; // Never retry an uncertain authorization write.
+          }
+          row.computerStatus = 'authorized';
+        }
+      }
+      // Includes a GLOBAL owner reread after the grant, not just its mutation response.
+      Object.assign(row, await refreshCampaignPlayer(row, rows, transport, row.computerStatus === 'authorized' ? undefined : activity));
+      if (row.safety === 'degraded') blocked = row.error;
+      update(row);
+    } catch (error) {
+      row.status = row.accepted ? 'degraded' : blocked ? 'blocked' : 'error';
+      row.safety = row.accepted ? 'degraded' : blocked ? 'blocked' : undefined;
+      row.error = errorText(error); row.notice = undefined;
+      const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : undefined;
+      row.ambiguous = !!row.sent && !row.accepted && (status === undefined || status >= 500);
+      if (row.accepted || row.ambiguous) blocked = row.error;
+      update(row);
+    }
+  }
   return rows;
 }
 export async function stopCampaign(rows: CampaignPlayerResult[], transport: Api = api): Promise<CampaignPlayerResult[]> {

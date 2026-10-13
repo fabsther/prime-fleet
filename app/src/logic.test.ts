@@ -59,7 +59,8 @@ describe('Fleet models and directives', () => {
     expect(() => campaignRequestId('nothex', 'host')).toThrow();
   });
   it('uses viewport size and orientation, not device identity', () => {
-    expect(layoutMode(760, 1000)).toMatchObject({ mode: 'phone', drawer: true, maxPanes: 1 });
+    expect(layoutMode(599, 1000)).toMatchObject({ mode: 'phone', drawer: true, maxPanes: 1 });
+    expect(layoutMode(760, 1000)).toMatchObject({ mode: 'tablet', drawer: true, maxPanes: 2, split: 'horizontal' });
     expect(layoutMode(800, 1200)).toMatchObject({ mode: 'tablet', split: 'horizontal' });
     expect(layoutMode(1250, 800)).toMatchObject({ mode: 'tablet', split: 'vertical' });
     expect(layoutMode(1600, 900)).toMatchObject({ mode: 'desktop', drawer: false, density: 'wide' });
@@ -147,6 +148,8 @@ describe('Public API controllers (no write retries)', () => {
     const calls: string[] = [], revisions: number[] = [];
     let rev = 10;
     const transport: Api = async (m, method, path, body) => {
+      if (path.includes('/runs?')) return { items: [], nextOffset: null };
+      if (method === 'GET' && path.startsWith('/api/v1/runs/')) return run(path.split('/').at(-1)!, `studio-${m}`);
       calls.push(`${m}:${method}`);
       if (method === 'GET') return { roadmap: { revision: rev++, plans: [plan] } };
       const request = body as { expectedRevision: number; targets: { stepId: string }[] };
@@ -163,13 +166,14 @@ describe('Public API controllers (no write retries)', () => {
   });
   it('blocks every launch if GUI is owned, even when reported unsupported', async () => {
     const guiPlan = { ...plan, steps: [{ ...plan.steps[0], note: plan.steps[0].note + '\n@gui' }, plan.steps[1]] };
-    const transport = vi.fn(async () => ({ ...computer(), supported: false, owner: { projectId: 'other', runId: 'other' } }));
+    const transport = vi.fn(async (_m, _method, path) => path.includes('/runs?') ? { items: [], nextOffset: null } : ({ ...computer(), supported: false, owner: { projectId: 'other', runId: 'other' } }));
     await expect(launchCampaign({ project, plan: guiPlan, machines: [machine('a', { capabilities: ['computer-use'] }), b] }, transport)).rejects.toThrow('owned');
-    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(3); // All target run pages, then the GUI global owner.
   });
   it('rejects changed instructions and records ambiguous work without replay', async () => {
     await expect(launchStep({ project, planId: plan.id, stepId: 'host', machine: a, expectedStep: plan.steps[0] }, async () => ({ roadmap: { revision: 1, plans: [{ ...plan, steps: [{ ...plan.steps[0], note: '@machine: A\nChanged.' }] }] } }))).rejects.toThrow('changed');
-    const transport: Api = async (m, method) => {
+    const transport: Api = async (m, method, path) => {
+      if (path.includes('/runs?')) return { items: [], nextOffset: null };
       if (method === 'GET') return { roadmap: { revision: 1, plans: [plan] } };
       if (m === 'a') throw new Error('Network timeout. Outcome unknown.');
       return accepted('guest', 'b');
@@ -182,10 +186,14 @@ describe('Public API controllers (no write retries)', () => {
     const guiPlan = { ...plan, steps: [{ ...plan.steps[0], note: plan.steps[0].note + '\n@gui' }] };
     const guiA = machine('a', { capabilities: ['computer-use'] });
     const posts: { path: string; body: any }[] = [];
+    let granted = false;
     const transport: Api = async (m, method, path, body) => {
-      if (path === '/api/v1/computer-use' && method === 'GET') return computer(7);
+      if (path.includes('/runs?')) return { items: [], nextOffset: null };
+      if (method === 'GET' && path.startsWith('/api/v1/runs/')) return accepted('host', m).run;
+      if (path === '/api/v1/computer-use' && method === 'GET') return granted ? { ...computer(8), enabled: true, owner: { projectId: 'p-a', runId: 'run-host' } } : computer(7);
       if (method === 'GET') return { roadmap: { revision: 3, plans: [guiPlan] } };
       posts.push({ path, body });
+      if (path === '/api/v1/computer-use') granted = true;
       return path.endsWith('/work') ? accepted('host', m) : computer(8);
     };
     const rows = await launchCampaign({ project, plan: guiPlan, machines: [guiA, b], campaignId: 'abcdef012345' }, transport);

@@ -7,7 +7,7 @@ export interface Project { id: string; name: string; syncId: string | null; mach
 export interface FleetProject { key: string; name: string; syncId: string | null; copies: Project[] }
 export interface Session { id: string; title: string; machineId: string; projectId: string; updatedAt?: string; createdAt?: string }
 export interface Run {
-  id: string; sessionId: string | null; projectId: string; machineId: string;
+  id: string; sessionId: string | null; projectId: string; machineId: string; requestId?: string;
   status: string; startedAt: string; endedAt?: string; interactions?: Record<string, unknown>[];
   error?: string | null;
 }
@@ -62,6 +62,47 @@ export function mergeSessions(sessions: Session[], runs: Run[] = []): FleetSessi
     return { id, title: copies[0].title, copies, newest: copies[0], lastAgentMachineId: (activeRun ?? history[0])?.machineId ?? copies[0].machineId, activeRun };
   }).sort((a, b) => timestamp(b.newest.updatedAt ?? b.newest.createdAt) - timestamp(a.newest.updatedAt ?? a.newest.createdAt));
 }
+// mergeSessions already sorts by recency. Active work takes priority on project open.
+export const defaultSession = (sessions: FleetSession[]) => sessions.find(session => session.activeRun) ?? sessions[0];
+
+// RoadmapDocument is additive; keep extension fields at this read-only boundary.
+export function roadmapSessionLabels(document: unknown, runs: Run[] = []): Record<string, string> {
+  const labels: Record<string, string> = Object.create(null);
+  const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!record(document) || !Array.isArray(document.plans)) return labels;
+  const candidates: Record<string, unknown>[] = [];
+  for (const plan of document.plans) {
+    if (!record(plan)) continue;
+    const steps: Record<string, unknown>[] = [];
+    const visit = (nodes: unknown, depth = 1) => {
+      if (!Array.isArray(nodes) || depth > 3) return;
+      for (const step of nodes) if (record(step)) { steps.push(step); visit(step.children, depth + 1); }
+    };
+    visit(plan.steps);
+    candidates.push(...steps);
+    const text = (value: unknown) => typeof value === 'string' && value.trim() ? value : undefined;
+    const fallback = (steps.length === 1 ? text(steps[0].text) : undefined) ?? text(plan.title);
+    // plan.sessions contains IDs, not work targets. Never infer a role by array order.
+    if (fallback && Array.isArray(plan.sessions)) for (const id of plan.sessions) if (text(id) && !labels[id as string]) labels[id as string] = fallback;
+    for (const step of steps) {
+      const label = text(step.text);
+      if (!label) continue;
+      const refs = [step.completion, ...(Array.isArray(step.externalLinks) ? step.externalLinks : [])];
+      for (const ref of refs) if (record(ref) && text(ref.sessionId)) labels[ref.sessionId as string] = label;
+    }
+  }
+  for (const run of runs) {
+    const campaignId = typeof run.requestId === 'string' ? run.requestId.match(/^cmp_([a-f0-9]{12})_/i)?.[1] : undefined;
+    if (!campaignId || typeof run.sessionId !== 'string' || !run.sessionId) continue;
+    const matches = [...new Map(candidates.map(step => [JSON.stringify([step.id, step.text]), step])).values()].filter(step => {
+      if (typeof step.id !== 'string' || typeof step.text !== 'string' || !step.text.trim()) return false;
+      try { return campaignRequestId(campaignId, step.id) === run.requestId; } catch { return false; }
+    });
+    // Truncation can collide. A request ID is evidence only with one exact candidate.
+    if (matches.length === 1) labels[run.sessionId] = `${matches[0].text} · ${campaignId}`;
+  }
+  return labels;
+}
 export function parseMarkup(text = '') {
   const assignments: string[] = [];
   let campaign = false, gui = false;
@@ -94,7 +135,7 @@ export function buildCampaignHeader(campaignId: string, player: CampaignPlayer, 
   // Only @campaign is removed from common instructions; other text is preserved.
   const common = summary.split(/\r?\n/).filter(line => !/^\s*@campaign\s*$/i.test(line)).join('\n').trim();
   const roster = players.map(p => `${p.index}) ${p.machine.name} ${p.step.text}`).join(' ; ');
-  const header = `Campagne de test ${campaignId} — joueur ${player.index}/${players.length} : ${player.step.text} (machine ${player.machine.name}).\nJoueurs : ${roster}\nConsignes communes :\n${common}\nRapport : outputs/multitest/${campaignId}/player-${player.index}.md (citer le chemin dans la réponse finale).${player.gui ? '\nComputer Use : attendre au plus 2 minutes son autorisation ; sinon signaler le blocage, sans prendre le contrôle d’une autre cible.' : ''}`;
+  const header = `Campagne de test ${campaignId} — joueur ${player.index}/${players.length} : ${player.step.text} (machine ${player.machine.name}).\nJoueurs : ${roster}\nConsignes communes :\n${common}\nRapport : outputs/multitest/${campaignId}/player-${player.index}.md (citer le chemin dans la réponse finale).\nSécurité : si une autre session agent possède Computer Use OU si une instance du jeu tourne déjà sur cette machine, signaler le conflit et ARRÊTER sans prendre le contrôle.${player.gui ? '\nComputer Use : uniquement en l’absence de conflit, attendre au plus 2 minutes l’autorisation de cette session ; sinon signaler le blocage, sans prendre le contrôle d’une autre cible.' : ''}`;
   if (header.length > 4000) throw new Error('Campaign instructions exceed 4000 characters.');
   return header;
 }
@@ -128,8 +169,9 @@ export function campaignRequestId(campaignId: string, stepId: string): string {
   return `cmp_${campaignId}_${stepId}`.slice(0, 100);
 }
 export function layoutMode(width: number, height: number) {
-  const mode = width <= 760 ? 'phone' : width <= 1250 ? 'tablet' : 'desktop';
+  const phone = Math.min(width, height) < 600;
+  const mode = phone ? 'phone' : width <= 1250 ? 'tablet' : 'desktop';
   return { mode, drawer: mode !== 'desktop', maxPanes: mode === 'phone' ? 1 : 2,
-    split: mode === 'tablet' && height > width ? 'horizontal' : 'vertical',
+    split: !phone && height >= width ? 'horizontal' : 'vertical',
     density: width >= 1600 ? 'wide' : width <= 1250 ? 'compact' : 'normal' } as const;
 }

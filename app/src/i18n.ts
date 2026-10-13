@@ -1,6 +1,31 @@
 import { useSyncExternalStore } from 'react';
 export type Language = 'fr' | 'en';
 export const table = {
+  "Accepted run ID:": {"fr": "ID du run accepté :", "en": "Accepted run ID:", "message": true},
+  "Session ID:": {"fr": "ID de session :", "en": "Session ID:", "message": true},
+  "Not assigned yet": {"fr": "Pas encore attribué", "en": "Not assigned yet", "message": true},
+  "Computer Use state could not be verified. Inspect Studio before continuing.": {"fr": "L’état de Computer Use n’a pas pu être vérifié. Vérifiez Studio avant de continuer.", "en": "Computer Use state could not be verified. Inspect Studio before continuing.", "message": true},
+  "Accepted run identity could not be verified. Inspect Studio before continuing.": {"fr": "L’identité du run accepté n’a pas pu être vérifiée. Vérifiez Studio avant de continuer.", "en": "Accepted run identity could not be verified. Inspect Studio before continuing.", "message": true},
+  "Other active runs in this project: {ids}. Further dispatch is blocked. No unrelated run was stopped.": {"fr": "Autres runs actifs dans ce projet : {ids}. Les lancements suivants sont bloqués. Aucun run tiers n’a été arrêté.", "en": "Other active runs in this project: {ids}. Further dispatch is blocked. No unrelated run was stopped.", "message": true},
+  "Active runs have unknown project IDs: {ids}. Project safety cannot be verified. Further dispatch is blocked.": {"fr": "Des runs actifs ont un ID de projet inconnu : {ids}. La sécurité du projet ne peut pas être vérifiée. Les lancements suivants sont bloqués.", "en": "Active runs have unknown project IDs: {ids}. Project safety cannot be verified. Further dispatch is blocked.", "message": true},
+  "Active run identities do not match this machine: {ids}. Project safety cannot be verified. Further dispatch is blocked.": {"fr": "Des runs actifs ne correspondent pas à cette machine : {ids}. La sécurité du projet ne peut pas être vérifiée. Les lancements suivants sont bloqués.", "en": "Active run identities do not match this machine: {ids}. Project safety cannot be verified. Further dispatch is blocked.", "message": true},
+  "Computer Use owner is hidden. Ownership cannot be verified. No takeover was attempted.": {"fr": "Le propriétaire de Computer Use est masqué. L’autorisation ne peut pas être vérifiée. Aucune prise de contrôle n’a été tentée.", "en": "Computer Use owner is hidden. Ownership cannot be verified. No takeover was attempted.", "message": true},
+  "Computer Use cleanup is pending or failed. Ownership cannot be verified.": {"fr": "La libération de Computer Use est en attente ou a échoué. L’autorisation ne peut pas être vérifiée.", "en": "Computer Use cleanup is pending or failed. Ownership cannot be verified.", "message": true},
+  "Computer Use belongs to another run or session. No takeover was attempted.": {"fr": "Computer Use appartient à un autre run ou à une autre session. Aucune prise de contrôle n’a été tentée.", "en": "Computer Use belongs to another run or session. No takeover was attempted.", "message": true},
+  "Computer Use authorization is not confirmed. Inspect Studio before continuing.": {"fr": "L’autorisation de Computer Use n’est pas confirmée. Vérifiez Studio avant de continuer.", "en": "Computer Use authorization is not confirmed. Inspect Studio before continuing.", "message": true},
+  "Computer Use is owned, busy or awaiting cleanup. No takeover was attempted.": {"fr": "Computer Use est réservé, occupé ou en attente de libération. Aucune prise de contrôle n’a été tentée.", "en": "Computer Use is owned, busy or awaiting cleanup. No takeover was attempted.", "message": true},
+  "Campaign safety check failed: {error}. No retry or takeover was attempted.": {"fr": "La vérification de la campagne a échoué : {error}. Aucun réessai d’écriture ni aucune prise de contrôle n’a été tenté.", "en": "Campaign safety check failed: {error}. No retry or takeover was attempted.", "message": true},
+  "Project activity and Computer Use ownership verified.": {"fr": "Activité du projet et autorisation de Computer Use vérifiées.", "en": "Project activity and Computer Use ownership verified.", "message": true},
+  "No other active runs in this project at the last check.": {"fr": "Aucun autre run actif dans ce projet lors de la dernière vérification.", "en": "No other active runs in this project at the last check.", "message": true},
+  "Ownership unverified": {"fr": "Autorisation non vérifiée", "en": "Ownership unverified", "message": true},
+  "Conflicting run IDs:": {"fr": "IDs des runs en conflit :", "en": "Conflicting run IDs:", "message": true},
+  "Safety checks are snapshots, not a distributed lock. Later resumes can still race. Active players are checked every 30 seconds. Conflicts block further dispatch; accepted runs are kept. No unrelated run is stopped and no Computer Use takeover is attempted.": {"fr": "Vérifications toutes les 30 secondes, sans verrou distribué ; un conflit bloque les lancements, sans perdre les runs acceptés ni toucher les runs tiers.", "en": "Checks run every 30 seconds without a distributed lock; conflicts block dispatch, keep accepted runs, and never stop or take over unrelated runs.", "message": true},
+  "Degraded": {"fr": "À vérifier", "en": "Degraded", "message": true},
+  "Healthy": {"fr": "Vérifié", "en": "Healthy", "message": true},
+  "(missing run ID)": {"fr": "(ID de run manquant)", "en": "(missing run ID)", "message": true},
+  "{name}: Other active runs in this project: {ids}. Further dispatch is blocked. No unrelated run was stopped.": {"fr": "{name} : Autres runs actifs dans ce projet : {ids}. Les lancements suivants sont bloqués. Aucun run tiers n’a été arrêté.", "en": "{name}: Other active runs in this project: {ids}. Further dispatch is blocked. No unrelated run was stopped.", "message": true},
+  "{name}: Active runs have unknown project IDs: {ids}. Project safety cannot be verified. Further dispatch is blocked.": {"fr": "{name} : Des runs actifs ont un ID de projet inconnu : {ids}. La sécurité du projet ne peut pas être vérifiée. Les lancements suivants sont bloqués.", "en": "{name}: Active runs have unknown project IDs: {ids}. Project safety cannot be verified. Further dispatch is blocked.", "message": true},
+  "{name}: Active run identities do not match this machine: {ids}. Project safety cannot be verified. Further dispatch is blocked.": {"fr": "{name} : Des runs actifs ne correspondent pas à cette machine : {ids}. La sécurité du projet ne peut pas être vérifiée. Les lancements suivants sont bloqués.", "en": "{name}: Active run identities do not match this machine: {ids}. Project safety cannot be verified. Further dispatch is blocked.", "message": true},
   "OS credential store": {"fr": "Stockage système", "en": "OS credential store"},
   "Machines": {"fr": "Machines", "en": "Machines"},
   "Choose a project": {"fr": "Choisissez un projet", "en": "Choose a project"},
@@ -339,12 +364,13 @@ export function localizeError(text: string, lang: Language): string {
         return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       }).join('');
       const match = new RegExp(`^${pattern}$`).exec(text);
-      if (match) return translate(key, lang, Object.fromEntries(names.map((name, i) => [name, match[i + 1]])));
+      if (match) return translate(key, lang, Object.fromEntries(names.map((name, i) => [name, name === 'error' ? localizeError(match[i + 1], lang) : match[i + 1]])));
     }
   }
   return text;
 }
 const statusKeys: Record<string, Key> = {
+  degraded: 'Degraded', healthy: 'Healthy',
   starting: 'Starting', pending: 'Pending', launching: 'Launching', stopping: 'Stopping', cancelled: 'Cancelled', canceled: 'Cancelled', error: 'Error', interrupted: 'Stopped',
   active: 'Active', paused: 'Paused', done: 'Done', abandoned: 'Abandoned',
   working: 'Working', running: 'Running', running_tool: 'Running a tool', waiting: 'Waiting',

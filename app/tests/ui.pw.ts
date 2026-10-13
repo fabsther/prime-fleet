@@ -29,7 +29,7 @@ for(const [name,width,height,theme] of [['desktop-dark',1440,900,'dark'],['deskt
   if(width<=1250)await page.getByRole('button',{name:'Open projects'}).click();
   await page.locator('.ps-row').filter({hasText:'Pieton'}).click();
   if(width<=1250)await page.getByRole('button',{name:'Open projects'}).click();
-  await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
+  await page.locator('.ps-subrow').first().click();
   await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
   await expect(page.getByLabel('Machine',{exact:true})).toHaveValue('studio-a');
   if(width<=760)await expect(page.locator('.ps-sidebar')).toBeHidden();
@@ -71,7 +71,7 @@ async function runBridge(page:any,nullable=false){
 async function workspace(page:any){
  await page.goto('/');await expect(page.getByRole('heading',{name:'ALIEN18'})).toBeVisible();
  await page.locator('.ps-row').filter({hasText:'Pieton'}).click();
- await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
+ await page.locator('.ps-subrow').first().click();
  await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
 }
 async function sendDraft(page:any,text='Continue'){
@@ -199,7 +199,7 @@ test('French is the default and an English switch persists without translating c
  await expect(page.getByLabel('Panneau 2')).toHaveValue('Roadmap');
  await expect(page.getByText('1/2 tâches cochées',{exact:true})).toBeVisible();
  await expect(page.getByText('Actif',{exact:true})).toBeVisible();
- await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
+ await page.locator('.ps-subrow').first().click();
  await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
  await page.locator('.ps-header').getByLabel('Langue').selectOption('en');
  await expect(page.locator('html')).toHaveAttribute('lang','en');
@@ -227,7 +227,7 @@ test('language changes keep connection forms, conversation drafts, and Roadmap e
  await expect(connection.getByLabel(/^Token/)).toHaveValue('pa_synthetic_unchanged');
  await connection.getByRole('button',{name:'Annuler'}).click();
  await page.locator('.ps-row').filter({hasText:'Pieton'}).click();
- await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
+ await page.locator('.ps-subrow').first().click();
  await page.getByLabel('Message',{exact:true}).fill('Draft @machine: ALIEN18 stays raw.');
  await page.locator('.ps-plan-title').filter({hasText:'Cooperative test'}).click();
  await page.getByRole('button',{name:'Modifier Cooperative test',exact:true}).click();

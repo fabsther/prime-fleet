@@ -27,4 +27,12 @@ describe('bilingual interface messages', () => {
   expect(translate('tasks checked','en',{checked:1,count:1},1)).toBe('1/1 task checked');
   expect(translate('tasks checked','en',{checked:1,count:2},2)).toBe('1/2 tasks checked');
  });
+ it('keeps campaign conflict IDs while translating blocked safety text', () => {
+  const text='BAGUETTE: Other active runs in this project: old-guest. Further dispatch is blocked. No unrelated run was stopped.';
+  const fr=localizeError(text,'fr');
+  expect(fr).toContain('BAGUETTE'); expect(fr).toContain('old-guest');
+  expect(fr).toContain('Les lancements suivants sont bloqués.');
+  expect(localizeError(fr,'en')).toBe(text);
+ });
+
 });
