@@ -230,7 +230,7 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
     <div className="ps-pane-section"><div className="ps-progress-label"><span>{checked}/{steps.length} tasks checked</span><span className="ps-stat">{steps.length ? Math.round(checked / steps.length * 100) : 0}%</span></div><progress className="ps-progress" value={checked} max={steps.length || 1} /></div>
     <div className="ps-pane-section fleet-roadmap-plans">
       {loading && <p className="ps-help" role="status">Reading Roadmap…</p>}
-      {!loading && document && !document.plans?.length && <p className="ps-help">Add a plan to organize work across your machines.</p>}
+      {!loading && document && !document.plans?.length && <p className="ps-help">{document.initialized === false ? 'Initialize this Roadmap before adding a plan.' : 'Add a plan to organize work across your machines.'}</p>}
       {document?.plans?.map(plan => {
         const list = flattenSteps(plan.steps), done = list.filter(s => s.done).length, open = expanded.includes(plan.id), isCampaign = parseMarkup(plan.summary).campaign;
         return <article className="ps-plan" key={plan.id}>
@@ -239,7 +239,8 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
           {open && <><p className="fleet-plan-summary">{plan.summary}</p>{renderSteps(plan, plan.steps)}<div className="fleet-roadmap-actions"><button className="ps-text-btn" disabled={busy} onClick={() => editStep(plan)}>Add step</button>{isCampaign && <button className="ps-btn ps-btn--secondary ps-btn--compact" disabled={busy} onClick={() => void action(() => launchCampaign(plan))}><Icon name="arrow-up-right" size={13} />Launch campaign</button>}<button className="ps-text-btn" disabled={busy} onClick={() => setEditor({ kind: 'journal', planId: plan.id, title: '', note: '', status: '', revision: document.revision })}>Add journal entry</button></div></>}
         </article>;
       })}
-      <button className="ps-btn ps-btn--primary" disabled={busy || loading || !document} onClick={() => editPlan()}><Icon name="plus" size={13} />Add a plan</button>
+      {document?.initialized === false && <button className="ps-btn ps-btn--primary" disabled={busy || loading} onClick={() => void action(() => mutate({ action: 'init' }))}>Initialize Roadmap</button>}
+      <button className="ps-btn ps-btn--primary" disabled={busy || loading || !document || document.initialized === false} onClick={() => editPlan()}><Icon name="plus" size={13} />Add a plan</button>
     </div>
     {campaign && <section className="ps-pane-section fleet-campaign" aria-label="Campaign panel">
       <div className="ps-plan-head"><h3 className="ps-heading">Campaign</h3><span className="ps-inline-count">{campaign.id}</span></div>

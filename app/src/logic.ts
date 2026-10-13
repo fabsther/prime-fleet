@@ -22,7 +22,7 @@ export interface Step {
   completion?: { machineId: string; sessionId?: string | null; completedAt?: number; [key: string]: unknown } | null;
 }
 export interface Plan { id: string; title?: string; summary?: string; steps: Step[]; [key: string]: unknown }
-export interface Roadmap { revision: number; plans?: Plan[]; [key: string]: unknown }
+export interface Roadmap { revision: number; initialized?: boolean; plans?: Plan[]; [key: string]: unknown }
 export interface RoadmapEnvelope { machineId: string; projectId: string; roadmap: Roadmap }
 export interface ComputerTarget { projectId: string; runId?: string; sessionId?: string }
 export interface ComputerState {

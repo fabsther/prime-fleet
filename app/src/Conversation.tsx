@@ -76,7 +76,7 @@ export default function Conversation({project,session,machines,onRun,onRefresh,o
    else {
     const copy=project.copies.find(p=>p.machineId===destination.machineId);if(!copy)throw Error('This project is not on the selected machine.');
     if(session){
-     const result=await continueConversation({machines,project,session,target:destination,message:draft,onSync:()=>setStreamError('Synchronizing…')});
+     const result=await continueConversation({machines,project,session,target:destination,message:draft});
      if(result.status==='blocked')throw Error(result.reason==='not-synced'?'Not yet synchronized on this machine. Refresh before sending.':'A run is still active. Wait for it to end or stop it on its machine.');
      if(result.status==='started'){setRun(result.run);onRun(destination.id,result.run);}
     }else{

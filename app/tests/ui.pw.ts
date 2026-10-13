@@ -146,3 +146,25 @@ test('tablet connection token avoids password/form semantics and keeps required 
   await save.click();await expect(dialog).not.toBeVisible();expect(await saves()).toBe(editing?2:1);
  }
 });
+
+
+test('new Roadmap requires an explicit revisioned initialization before plan creation',async({page})=>{
+ await page.addInitScript(()=>{
+  const w=window as any,base=w.__TAURI_INTERNALS__.invoke;let initialized=false;w.__initCalls=[];
+  w.__TAURI_INTERNALS__.invoke=async(cmd:string,args:any)=>{
+   if(cmd==='api'&&args.path.endsWith('/roadmap'))return {roadmap:{revision:initialized?1:0,initialized,plans:[]}};
+   if(cmd==='api'&&args.path.endsWith('/roadmap/mutations')){
+    w.__initCalls.push(args.body);
+    if(args.body.action!=='init'||args.body.expectedRevision!==0)throw Error('Unexpected mutation');
+    initialized=true;return {roadmap:{revision:1,initialized:true,plans:[]}};
+   }
+   return base(cmd,args);
+  };
+ });
+ await page.goto('/');await page.locator('.ps-row').first().click();
+ await expect(page.getByRole('button',{name:'Add a plan',exact:true})).toBeDisabled();
+ await page.getByRole('button',{name:'Initialize Roadmap',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Add a plan',exact:true})).toBeEnabled();
+ await expect(page.getByRole('button',{name:'Initialize Roadmap',exact:true})).toHaveCount(0);
+ expect(await page.evaluate(()=>(window as any).__initCalls)).toEqual([{action:'init',expectedRevision:0}]);
+});

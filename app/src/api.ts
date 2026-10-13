@@ -84,7 +84,7 @@ const canonical = (value: unknown): string => {
 export const sameLastMessage = (a: MessageItem[], b: MessageItem[]) => canonical(a.at(-1) ?? null) === canonical(b.at(-1) ?? null);
 export interface ContinueOptions {
   project: FleetProject; session: FleetSession; machines: Machine[]; target: Machine; message: string;
-  activeAction?: 'wait' | 'stop'; mode?: 'steer' | 'follow_up'; onSync?: () => void;
+  activeAction?: 'wait' | 'stop'; mode?: 'steer' | 'follow_up';
 }
 export type ContinueResult = { status: 'started'; run: Run } | { status: 'sent'; machineId: string } | { status: 'blocked'; reason: 'active' | 'stopping' | 'not-synced'; run?: Run };
 export async function continueConversation(options: ContinueOptions, transport: Api = api): Promise<ContinueResult> {
@@ -124,7 +124,6 @@ export async function continueConversation(options: ContinueOptions, transport: 
   }
   if (source.id !== target.id) {
     if (canSync(source) && canSync(target)) {
-      options.onSync?.();
       await syncProject(source, sourceProject.id, session.id, transport);
       await syncProject(target, targetProject.id, session.id, transport);
     }
