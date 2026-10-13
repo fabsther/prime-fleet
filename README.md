@@ -130,3 +130,9 @@ API v1 cannot register a missing project on a machine. There is no push service,
 MIT. The unmodified Studio CSS, icons and theme assets are included with their [MIT license](app/src/studio/LICENSE.txt), copyright 2026 zerr0o. Fleet composes their `ps-` markup and tokens without a UI library. React state and small pure helpers replace router/state frameworks. Markdown uses `react-markdown` and GFM, without raw HTML.
 
 [Specification](docs/SPEC.md) · [Decisions](docs/DECISIONS.md)
+
+### Debug authentication checks
+
+If a device gets HTTP 401, re-save its token, then expand **Machines → Auth diagnostics** in this debug build. Compare vault byte count and SHA-256 fingerprint with the same machine in the PC app. Read-back should be stable and the request header token should match the vault. The diagnostics never expose token text; they are absent from release builds. A header match proves local construction, not server reception. Invalid/unreadable storage fails closed; Forget/re-add can recover a machine whose old token cannot be read.
+
+Live acceptance results and remaining scope/device checks are in [docs/LIVE-ACCEPTANCE.md](docs/LIVE-ACCEPTANCE.md).

@@ -57,3 +57,13 @@ Sync remains capability- and permission-gated. No sync state enum is guessed. AP
 ## Source size
 
 Own app/runtime/build glue: 2,186 physical lines (984 React/CSS/controller lines; 1,154 Rust/Keystore plugin lines; 48 Android build glue lines). Skill implementations: 611 Python lines. Tests and unchanged Studio style assets are counted separately. No vendor/generated/build output is included.
+
+## Live and tablet update · 13 October 2026
+
+The initial no-POST baseline above is superseded for the explicitly authorized fleet-sandbox only. See [LIVE-ACCEPTANCE.md](LIVE-ACCEPTANCE.md) for the per-check table and remaining scope/device limits. Current tests: 16 Vitest, 10 Edge UI, 17 skill safety, 11 Rust runtime/SSE, 1 Rust bridge, 1 Kotlin Invoke/GCM. Frontend, Android compile/package, desktop package, Clippy and desktop release check pass. Native AndroidKeyStore hardware/device persistence and actual tablet authentication remain unproven until parent retest.
+
+Current artifact hashes (supersede earlier baseline):
+
+- `app/src-tauri/target/debug/prime-fleet.exe` · 18,441,216 bytes · `643e8c6f0e9b259ca903956ea8d580508c8dac6c672660cae466e2fff712a1d4`
+- `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,488,064 bytes · `b71b82f5a2d851513b9fc20cea9553bd46580f56dc402676d6e09ca2eeaf1ba8`
+- `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,039,685 bytes · `95c34b0513aa1bfa4e1814c26044e1ffcadf16acd475f8cf987a7cf4f8973a0f`
