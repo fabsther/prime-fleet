@@ -82,7 +82,11 @@ npm run tauri android init
 npm run android:build
 ```
 
-This builds a debug ARM64 APK. JavaScript debugging stays enabled; native debug symbols remain in the Cargo target rather than inflating the installable APK. On Windows without symlink privilege, it packages the freshly built Rust library by copying it and running Gradle without the redundant Rust task. No Developer Mode change is needed. Kotlin incremental compilation is disabled to avoid cross-drive Cargo cache errors. Generated projects are ignored; `android:prepare` reapplies the installed SDK settings after initialization. For other architectures, run preparation then `npm run tauri -- android build --debug --target <target>`.
+This builds a debug ARM64 APK. Kotlin incremental compilation is disabled to avoid cross-drive Cargo cache errors. Generated projects are ignored; `android:prepare` reapplies the installed SDK settings after initialization. For other architectures, run preparation then `npm run tauri -- android build --debug --target <target>`.
+
+### Windows without Developer Mode
+
+`app/scripts/android-build.mjs` first uses the normal `tauri android build` path. Machines with symlink privilege keep that path. Only when Windows rejects the library symlink, the script copies the freshly built ARM64 `.so` into `jniLibs`, strips its native debug symbols with the installed NDK, and runs Gradle assemble with the completed Rust task excluded. Full native symbols stay in the Cargo target, and JavaScript debugging stays enabled. No Developer Mode or other system setting change is needed.
 
 Tokens must be registered on the Android device; the desktop vault is not copied. Downloads are saved in app-private storage on mobile. Xiaomi HyperOS may require **Install via USB** in developer options. Physical tablet/Tailscale/Keystore operation must be checked on the device.
 
