@@ -11,13 +11,15 @@ export default function Conversation({project,session,machines,onRun,onRefresh,o
  const findMachine=(id:string)=>machines.find(m=>m.machineId===id || m.id===id);
  const [items,setItems]=useState<MessageItem[]>([]),[files,setFiles]=useState<any[]>([]),[draft,setDraft]=useState(''),[target,setTarget]=useState(''),[mode,setMode]=useState('follow_up'),[busy,setBusy]=useState(false),[loading,setLoading]=useState(false),[streamError,setStreamError]=useState('');
  const [run,setRun]=useState<Run|undefined>(session?.activeRun),[answer,setAnswer]=useState<Record<string,string>>({}),[ready,setReady]=useState(true);
- const after=useRef(0),generation=useRef(0),[resume,setResume]=useState(0);
+ const after=useRef(0),cursorRun=useRef(''),generation=useRef(0),[resume,setResume]=useState(0);
  const migrateDialog=useRef<HTMLDialogElement>(null),[migrationTarget,setMigrationTarget]=useState(''),[waitingTarget,setWaitingTarget]=useState('');
  const active=run && isActiveRun(run) ? run : undefined;
+ const liveSessionId=session?.id ?? run?.sessionId;
+ const latestRun=useRef(run);latestRun.current=run;
  const source=findMachine(session?.newest.machineId ?? target), owner=findMachine(active?.machineId ?? target);
  const available=machines.filter(m=>m.status==='online' && project.copies.some(c=>c.machineId===m.machineId));
  useEffect(()=>{setRun(session?.activeRun);},[session?.activeRun]);
- useEffect(()=>{setTarget(session?.activeRun?.machineId ?? session?.lastAgentMachineId ?? available[0]?.machineId ?? '');setItems([]);setFiles([]);after.current=0;setStreamError('');},[session?.id,project.key]);
+ useEffect(()=>{setTarget(session?.activeRun?.machineId ?? session?.lastAgentMachineId ?? available[0]?.machineId ?? '');setItems([]);setFiles([]);setStreamError('');},[session?.id,project.key]);
  useEffect(()=>{if(active)setTarget(active.machineId);else if(waitingTarget){setTarget(waitingTarget);setWaitingTarget('');}},[active?.id,waitingTarget]);
  useEffect(()=>{
    let cancelled=false; setLoading(true);
@@ -39,14 +41,16 @@ export default function Conversation({project,session,machines,onRun,onRefresh,o
  },[target,session?.id,source?.id,active?.id,resume]);
  useEffect(()=>{
   if(!active || !owner)return;
+  if(cursorRun.current!==active.id){cursorRun.current=active.id;after.current=0;}
   const machineId=owner.id ?? owner.machineId,path=`/runs/${encodeURIComponent(active.id)}/events`,epoch=++generation.current;
   let unlisten:(()=>void)|undefined,endListen:(()=>void)|undefined,id:string|undefined,cancelled=false;
   async function start(){
    unlisten=await listen<any>('fleet-stream',({payload})=>{
     if(cancelled || generation.current!==epoch || payload.machineId!==machineId || payload.path!==path)return;
     const e=payload.event;
+    if(e.sessionId && e.sessionId!==latestRun.current?.sessionId){const promoted={...latestRun.current!,sessionId:e.sessionId};latestRun.current=promoted;setRun(promoted);onRun(machineId,promoted);}
     after.current=Math.max(after.current,payload.id ?? e.seq ?? 0);
-    if(e.kind==='replay_truncated')void listMessages(machineId,session!.id).then(setItems).catch(onError);
+    if(e.kind==='replay_truncated' && (e.sessionId || liveSessionId))void listMessages(machineId,e.sessionId || liveSessionId).then(setItems).catch(onError);
     if(e.message)setItems(old=>{const key=e.message.id;return key && old.some(m=>m.id===key)?old.map(m=>m.id===key?{...m,...e.message}:m):[...old,e.message];});
     if(e.run)setRun({...e.run,machineId:owner!.machineId});
     if(/interaction|question/.test(e.kind ?? '')) void api(machineId,'GET',`/runs/${active!.id}`).then(setRun).catch(onError);
@@ -55,7 +59,7 @@ export default function Conversation({project,session,machines,onRun,onRefresh,o
    endListen=await listen<any>('fleet-stream-end',({payload})=>{
     if(cancelled || payload.machineId!==machineId || payload.path!==path)return;
     if(payload.error)setStreamError(payload.error.message ?? 'Live stream ended. Resume to read new events.');
-    void Promise.all([api(machineId,'GET',`/runs/${active!.id}`),listMessages(machineId,session!.id)]).then(([fresh,messages])=>{if(!cancelled){setRun(fresh);setItems(messages);void onRefresh();}}).catch(onError);
+    void api(machineId,'GET',`/runs/${active!.id}`).then(async fresh=>{if(cancelled)return;setRun(fresh);if(fresh.sessionId){onRun(machineId,fresh);setItems(await listMessages(machineId,fresh.sessionId));}void onRefresh();}).catch(onError);
    });
    if(cancelled){unlisten();endListen();return;}
    try{id=await invoke<string>('stream',{machineId,path,after:after.current});if(cancelled)await invoke('stop_stream',{streamId:id});}catch(error){if(!cancelled){setStreamError('Live stream failed. Resume to reconnect.');onError(error);}}
@@ -68,7 +72,7 @@ export default function Conversation({project,session,machines,onRun,onRefresh,o
   const destination=findMachine(target);if(!destination)return;
   setBusy(true);
   try{
-   if(active){await api(destination.id ?? destination.machineId,'POST',`/sessions/${session!.id}/messages`,{requestId:crypto.randomUUID(),mode,message:draft});}
+   if(active){if(!liveSessionId)throw Error('Studio has not assigned this run to a conversation yet. Wait for the next event.');await api(destination.id ?? destination.machineId,'POST',`/sessions/${liveSessionId}/messages`,{requestId:crypto.randomUUID(),mode,message:draft});}
    else {
     const copy=project.copies.find(p=>p.machineId===destination.machineId);if(!copy)throw Error('This project is not on the selected machine.');
     if(session){
@@ -103,7 +107,7 @@ export default function Conversation({project,session,machines,onRun,onRefresh,o
   {loading&&<p className="ps-help">Loading history…</p>}
   {!items.length&&!loading&&<div className="fleet-empty"><Icon name="conversation" size={28}/><h2>{session?'Conversation':'New conversation'}</h2><p className="ps-help">Choose a machine and send a message.</p></div>}
   {items.map((m,i)=><article key={m.id ?? i} className={`ps-msg ${m.role==='user'?'ps-msg--user':''}`}><div className="ps-msg-head"><span className="ps-avatar"><Icon name={m.role==='user'?'user':'model'}/></span><span className="ps-msg-author">{m.role==='user'?'You':m.role==='assistant'?'Prime Agent':m.role}</span><span className="ps-msg-model">{String(m.model ?? '')}</span><span className="ps-msg-time">{m.timestamp?new Date(m.timestamp).toLocaleString():''}</span></div><div className="ps-msg-body ps-prose fleet-message-body">{m.thinking&&<details><summary className="ps-help">Thinking</summary><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.thinking}</ReactMarkdown></details>}<ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text ?? ''}</ReactMarkdown>{Array.isArray(m.tools)&&<details className="ps-activity"><summary>Agent activity</summary><pre>{JSON.stringify(m.tools,null,2)}</pre></details>}</div></article>)}
-  {active?.interactions?.filter((q:any)=>!q.respondedAt&&!q.resolved&&!q.response).map((q:any)=><section className="ps-question" key={q.id}><span className="ps-help">Agent question</span><h3>{q.question ?? q.title ?? q.message ?? 'The agent needs your answer.'}</h3>{(q.options ?? q.choices ?? []).map((option:any,j:number)=><label className="ps-question-option" key={j}><input type="radio" name={q.id} checked={answer[q.id]===(option.label ?? option.value ?? option)} onChange={()=>setAnswer({...answer,[q.id]:option.label ?? option.value ?? option})}/><span>{option.label ?? option.value ?? option}<small>{option.description}</small></span></label>)}<input className="ps-question-input ps-input" value={answer[q.id]??''} placeholder="Or write another answer…" onChange={e=>setAnswer({...answer,[q.id]:e.target.value})}/><div className="fleet-toolbar"><button className="ps-btn ps-btn--primary" disabled={!answer[q.id]} onClick={()=>respond(q,{value:answer[q.id]})}>Send answer</button>{q.type==='confirm'&&<button className="ps-btn ps-btn--secondary" onClick={()=>respond(q,{confirmed:true})}>Confirm</button>}<button className="ps-btn ps-btn--secondary" onClick={()=>respond(q,{cancelled:true})}>Skip</button></div></section>)}
+  {active?.interactions?.filter((q:any)=>q.status==='pending').map((q:any)=><section className="ps-question" key={q.id}><span className="ps-help">Agent question</span><h3>{q.title ?? q.message ?? 'The agent needs your answer.'}</h3>{(q.options ?? []).map((option:string,j:number)=><label className="ps-question-option" key={j}><input type="radio" name={q.id} checked={answer[q.id]===option} onChange={()=>setAnswer({...answer,[q.id]:option})}/><span>{option}<small>{q.optionDetails?.[j]?.description}</small></span></label>)}{q.method!=='confirm'&&(q.method!=='select'||q.allowCustom)&&<textarea className="ps-question-input ps-input" rows={q.method==='editor'?6:2} maxLength={10000} value={answer[q.id]??q.prefill??''} placeholder={q.placeholder??'Or write another answer…'} onChange={e=>setAnswer({...answer,[q.id]:e.target.value})}/>}<div className="fleet-toolbar">{q.method==='confirm'?<><button className="ps-btn ps-btn--primary" onClick={()=>respond(q,{confirmed:true})}>Confirm</button><button className="ps-btn ps-btn--secondary" onClick={()=>respond(q,{confirmed:false})}>Decline</button></>:<button className="ps-btn ps-btn--primary" disabled={!(answer[q.id]??q.prefill)} onClick={()=>respond(q,{value:answer[q.id]??q.prefill})}>Send answer</button>}<button className="ps-btn ps-btn--secondary" onClick={()=>respond(q,{cancelled:true})}>Skip</button></div></section>)}
   </div></div>
   <div className="ps-composer-area"><form className="ps-composer fleet-composer" onSubmit={e=>{e.preventDefault();void send();}}><textarea aria-label="Message" placeholder="What would you like to build?" value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send();}}}/><div className="ps-composer-toolbar"><div className="fleet-toolbar"><Icon name="machine"/><select className="ps-select ps-select--bare" aria-label="Machine" value={target} disabled={!!active || busy} onChange={e=>setTarget(e.target.value)}>{available.map(m=><option key={m.machineId} value={m.machineId}>{m.name}</option>)}</select>{active&&<><Icon name="lock"/><select className="ps-select ps-select--bare" aria-label="Message mode" value={mode} onChange={e=>setMode(e.target.value)}><option value="follow_up">Follow up</option><option value="steer">Steer</option></select><button type="button" className="ps-text-btn fleet-error" onClick={stop}>Stop run</button><button type="button" className="ps-text-btn" onClick={()=>{setMigrationTarget(available.find(m=>m.machineId!==active.machineId)?.machineId ?? '');migrateDialog.current?.showModal();}}>Continue elsewhere</button></>}</div><button className="ps-send-btn" aria-label={`Send to ${findMachine(target)?.name ?? 'machine'}`} title={`Send to ${findMachine(target)?.name ?? 'machine'}`} disabled={!draft.trim()||busy||!target||!ready}><Icon name="arrow-up"/></button></div></form><div className="ps-composer-hint">{busy?'Sending…':!ready?`Not yet synchronized on ${findMachine(target)?.name}. Refresh after Studio synchronizes.`:active?`Run on ${owner?.name} · ${active.status}`:'Enter to send · Shift Enter for a new line'}</div></div>
  </>;

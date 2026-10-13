@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { FormEvent, Dispatch, SetStateAction } from 'react';
-import { api, errorText, projectPath as path, launchCampaign as launchCampaignWork, launchStep } from './api';
+import { api, errorText, projectPath as path, launchCampaign as launchCampaignWork, launchStep, stopCampaign, messageCampaign } from './api';
 import type { CampaignPlayerResult } from './api';
 import { assignMachine, campaignRequestId, flattenSteps, isActiveRun, newCampaignId, parseMarkup, resolveMachine, validateCampaign } from './logic';
 import type { CampaignPlayer, ComputerState, Machine, Plan, Roadmap as Document, Run, Step } from './logic';
@@ -19,7 +19,6 @@ export type RoadmapProps = {
 type Editor = { kind: 'plan' | 'step' | 'journal'; planId?: string; stepId?: string; parentId?: string; title: string; note: string; status: string; revision: number };
 type Player = { ambiguous?: boolean; key: string; player: CampaignPlayer; machineId: string; projectId: string; requestId: string; status: string; run?: Run; computer?: ComputerState; error?: string; notice?: string; sent?: boolean };
 export type Campaign = { launching?: boolean; id: string; planId: string; machineId: string; projectId: string; players: Player[] };
-const ownsComputer = (state: ComputerState, run: Run) => !state.ownerHidden && state.owner?.projectId === run.projectId && (state.owner.runId ? state.owner.runId === run.id : !!run.sessionId && state.owner.sessionId === run.sessionId);
 
 export default function Roadmap({ machineId, projectId, machines, projectCopies, onRun, onError, campaign, onCampaign: setCampaign }: RoadmapProps) {
   const [document, setDocument] = useState<Document>();
@@ -178,25 +177,16 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
     if (activeCampaignRuns.length) void follow().catch(onError);
     return () => { cancelled = true; cleanup.forEach(fn => fn()); streams.forEach(streamId => { void invoke('stop_stream', { streamId }); }); };
   }, [activeCampaignKey]);
+  function resultFor(player: Player): CampaignPlayerResult {
+    return { campaignId: campaign!.id, player: player.player, requestId: player.requestId, status: 'accepted',
+      accepted: player.run ? { accepted: true, queued: false, run: player.run, sessionId: player.run.sessionId,
+        requestId: player.requestId, machineId: player.run.machineId, projectId: player.projectId } : undefined };
+  }
   async function stopPlayer(player: Player) {
     if (!player.run) throw new Error('Acceptance is unknown. Inspect runs in Studio before starting or stopping a replacement.');
-    await api(player.machineId, 'POST', `/api/v1/runs/${encodeURIComponent(player.run.id)}/stop`, {});
-    updatePlayer(player.key, { status: 'Stop requested' });
-    if (player.player.gui && machines.find(m => m.id === player.machineId)?.capabilities?.includes('computer-use')) {
-      const state: ComputerState = await api(player.machineId, 'GET', '/api/v1/computer-use');
-      updatePlayer(player.key, { computer: state });
-      if (ownsComputer(state, player.run)) {
-        // Stopped runs are not valid authorization targets; their session remains valid.
-        if (!player.run.sessionId) throw new Error('Run stopped. Revoke its Computer Use manually in Studio; no session target is available.');
-        try {
-          const revoked: ComputerState = await api(player.machineId, 'POST', '/api/v1/computer-use', { enabled: false, expectedRevision: state.revision, sessionId: player.run.sessionId });
-          updatePlayer(player.key, { computer: revoked });
-        } catch (error) {
-          try { updatePlayer(player.key, { computer: await api(player.machineId, 'GET', '/api/v1/computer-use') }); } catch { /* Keep the failed write; do not retry. */ }
-          throw error;
-        }
-      }
-    }
+    const [row] = await stopCampaign([resultFor(player)]);
+    updatePlayer(player.key, { status: row.status, computer: row.computer, error: row.error });
+    if (row.error) throw new Error(row.error);
     await refreshPlayer(player);
   }
   async function forPlayers(work: (player: Player) => Promise<void>, selected = campaign?.players ?? []) {
@@ -204,7 +194,8 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
   }
   async function messagePlayer(player: Player, text: string) {
     if (!player.run?.sessionId || !isActiveRun(player.run)) throw new Error(`${player.player.step.text}: no active conversation to message.`);
-    await api(player.machineId, 'POST', `/api/v1/sessions/${encodeURIComponent(player.run.sessionId)}/messages`, { requestId: crypto.randomUUID(), mode: 'steer', message: text });
+    const [result] = await messageCampaign([resultFor(player)], text);
+    if (result?.status === 'rejected') throw result.reason;
     updatePlayer(player.key, { notice: 'Message accepted.' });
   }
   const steps = flattenSteps(document?.plans?.flatMap(plan => plan.steps) ?? []);

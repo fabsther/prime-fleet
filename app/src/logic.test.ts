@@ -96,7 +96,7 @@ describe('Public API controllers (no write retries)', () => {
   });
   it('routes live messages to the owner and does not migrate a running session', async () => {
     const liveSession = { ...session, activeRun: run('live') };
-    const transport = vi.fn(async (_m, method) => method === 'GET' ? liveSession.activeRun : {});
+    const transport = vi.fn(async (m, method, path) => method === 'GET' ? path.includes('?limit=') ? { items: m === 'a' ? [liveSession.activeRun] : [], nextOffset: null } : liveSession.activeRun : {});
     expect((await continueConversation({ project, session: liveSession, machines: [a, b], target: b, message: 'x' }, transport)).status).toBe('blocked');
     expect(transport.mock.calls.every(c => c[1] === 'GET')).toBe(true);
     await continueConversation({ project, session: liveSession, machines: [a, b], target: a, message: 'x' }, transport);
@@ -123,13 +123,25 @@ describe('Public API controllers (no write retries)', () => {
       'c:POST:/api/v1/runs/old-run/stop', 'c:POST:/api/v1/projects/p-c/sync',
       'b:POST:/api/v1/projects/p-b/sync', 'b:POST:/api/v1/projects/p-b/runs',
     ]);
-    const stillRunning: Api = async (_m, method) => method === 'GET' ? activeSession.activeRun : { stopped: true };
+    const stillRunning: Api = async (m, method, path) => method === 'GET' ? path.includes('?limit=') ? { items: m === 'c' ? [activeSession.activeRun] : [], nextOffset: null } : activeSession.activeRun : { stopped: true };
     expect(await continueConversation({ project: fullProject, session: activeSession, machines, target: machines[1], message: 'Continue', activeAction: 'stop' }, stillRunning)).toMatchObject({ status: 'blocked', reason: 'stopping' });
   });
   it('refuses an active run owned by an unknown machine without sending anything', async () => {
     const transport = vi.fn();
     await expect(continueConversation({ project, session: { ...session, activeRun: run('unknown', 'studio-unknown') }, machines: [a, b], target: b, message: 'Continue' }, transport)).rejects.toThrow('Active run machine is unknown');
     expect(transport).not.toHaveBeenCalled();
+  });
+  it('finds a newly active third copy and rejects multiple live owners before writes', async () => {
+    const c = machine('c');
+    const fullProject = groupProjects([...project.copies, { id: 'p-c', name: 'Game', syncId: 'game', machineId: c.machineId! }])[0];
+    let conflict = false;
+    const transport = vi.fn(async (m, method) => {
+      expect(method).toBe('GET');
+      return { items: m === 'c' || (conflict && m === 'a') ? [run(`live-${m}`, `studio-${m}`)] : [], nextOffset: null };
+    });
+    expect(await continueConversation({ project: fullProject, session, machines: [a,b,c], target: b, message: 'Continue' }, transport)).toMatchObject({ status: 'blocked', reason: 'active', run: { machineId: c.machineId } });
+    conflict = true;
+    await expect(continueConversation({ project: fullProject, session, machines: [a,b,c], target: b, message: 'Continue' }, transport)).rejects.toThrow('multiple active');
   });
   it('reads fresh revisions per machine and keeps other players after a 409', async () => {
     const calls: string[] = [], revisions: number[] = [];

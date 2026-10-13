@@ -303,6 +303,19 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual(call.call_count, 1)
             self.assertNotIn("pa_SECRET", str(error.exception))
 
+    def test_manifest_reaches_stdout_when_optional_file_save_fails(self):
+        fake = FakeCLI()
+        manifest = {"campaignId": "abcdef012345", "players": [{"accepted": {"run": {"id": "kept-run"}}}]}
+        stream = io.StringIO()
+        with patch.object(campaign, "CLI", return_value=fake), patch.object(campaign, "launch", return_value=manifest), \
+             patch.object(Path, "exists", return_value=False), patch.object(Path, "mkdir"), \
+             patch.object(Path, "open", side_effect=OSError("Permission denied")), \
+             patch.object(sys, "argv", ["launch", "--machine", "A", "--project", "Game", "--plan", "P", "--output", "manifest.json"]), \
+             contextlib.redirect_stdout(stream):
+            with self.assertRaises(OSError):
+                campaign.main()
+        self.assertEqual(json.loads(stream.getvalue()), manifest)
+
     def test_followup_dry_run_and_gui_missing_capability(self):
         fake = FakeCLI(True)
         fake.info["B"]["capabilities"] = []

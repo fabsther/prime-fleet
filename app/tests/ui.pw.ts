@@ -39,3 +39,73 @@ for(const [name,width,height,theme] of [['desktop-dark',1440,900,'dark'],['deskt
   await page.screenshot({path:`../.local/screenshots/${name}.png`});
  });
 }
+
+async function runBridge(page:any,nullable=false){
+ await page.evaluate((nullable:boolean)=>{
+  const w=window as any,base=w.__TAURI_INTERNALS__.invoke,callbacks=new Map<number,any>(),events=new Map<string,number[]>();
+  w.__calls=[];w.__run=undefined;w.__nullable=nullable;let next=1,runNumber=0;
+  w.__TAURI_INTERNALS__.transformCallback=(fn:any)=>{const id=next++;callbacks.set(id,fn);return id;};
+  w.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:(event:string,id:number)=>events.set(event,(events.get(event)??[]).filter(n=>n!==id))};
+  w.__emit=(event:string,payload:any)=>(events.get(event)??[]).forEach(id=>callbacks.get(id)?.({payload}));
+  w.__TAURI_INTERNALS__.invoke=async(cmd:string,args:any)=>{
+   w.__calls.push({cmd,...args});
+   if(cmd==='plugin:event|listen'){events.set(args.event,[...(events.get(args.event)??[]),args.handler]);return args.handler;}
+   if(cmd==='plugin:event|unlisten'||cmd==='stop_stream')return;
+   if(cmd==='stream')return `stream-${next++}`;
+   const path=args?.path??'';
+   if(cmd==='api'){
+    if(args.method==='GET'&&path.startsWith('/api/v1/runs?'))return {items:args.machineId==='a'&&w.__run?[w.__run]:[],nextOffset:null};
+    if(args.method==='GET'&&path.startsWith('/runs/'))return structuredClone(w.__run);
+    if(args.method==='GET'&&path.startsWith('/api/v1/runs/'))return structuredClone(w.__run);
+    if(args.method==='POST'&&path.endsWith('/runs')){w.__run={id:`r${++runNumber}`,sessionId:nullable?null:'session',projectId:'p-a',machineId:'studio-a',status:'running',startedAt:'2026-10-13T17:02:00Z',interactions:[]};return structuredClone(w.__run);}
+    if(args.method==='POST'&&path.endsWith('/interactions')){w.__run.interactions=w.__run.interactions.map((q:any)=>q.id===args.body.id?{...q,status:'answered'}:q);return {};}
+    if(args.method==='POST'&&path.endsWith('/messages'))return {};
+    if(args.method==='GET'&&path.includes('/sessions')&&path.includes('?')&&w.__run?.sessionId==='new-s'&&!path.includes('/messages')&&!path.includes('/files'))return {items:[{id:'new-s',title:'New session',machineId:'studio-a',projectId:'p-a',updatedAt:'2026-10-13T17:03:00Z'}],nextOffset:null};
+    if(args.method==='GET'&&path.includes('/sessions/new-s/messages'))return {items:[{id:'new-msg',role:'assistant',text:'New session history.'}],nextOffset:null};
+   }
+   return base(cmd,args);
+  };
+ },nullable);
+}
+async function workspace(page:any){
+ await page.goto('/');await expect(page.getByRole('heading',{name:'ALIEN18'})).toBeVisible();
+ await page.locator('.ps-row').filter({hasText:'Pieton'}).click();
+ await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
+ await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
+}
+async function sendDraft(page:any,text='Continue'){
+ await page.getByLabel('Message',{exact:true}).fill(text);await page.getByRole('button',{name:'Send to ALIEN18'}).click();
+}
+test('new run resets its cursor but explicit resume keeps its cursor',async({page})=>{
+ await workspace(page);await runBridge(page);await sendDraft(page);
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='stream').length)).toBe(1);
+ await page.evaluate(()=>{const w=window as any;w.__emit('fleet-stream',{machineId:'a',path:'/runs/r1/events',id:100,event:{kind:'message',seq:100,message:{id:'live',role:'assistant',text:'First run.'}}});w.__run={...w.__run,status:'completed',endedAt:'2026-10-13T17:03:00Z'};w.__emit('fleet-stream-end',{machineId:'a',path:'/runs/r1/events'});});
+ await expect(page.getByLabel('Machine',{exact:true})).toBeEnabled();await sendDraft(page,'Next run');
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='stream').at(-1)?.path)).toBe('/runs/r2/events');
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='stream').at(-1).after)).toBe(0);
+ await page.evaluate(()=>{const w=window as any;w.__emit('fleet-stream',{machineId:'a',path:'/runs/r2/events',id:3,event:{kind:'message',seq:3,message:{id:'live2',role:'assistant',text:'Second run.'}}});w.__emit('fleet-stream-end',{machineId:'a',path:'/runs/r2/events',error:{message:'Disconnected.'}});});
+ await page.getByRole('button',{name:'Resume',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='stream').at(-1).after)).toBe(3);
+});
+test('null session acceptance is promoted by the native session event',async({page})=>{
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+ await workspace(page);await runBridge(page,true);await page.getByRole('button',{name:'New conversation',exact:true}).click();await sendDraft(page);
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='stream').length)).toBe(1);
+ await page.evaluate(()=>{const w=window as any;w.__emit('fleet-stream-end',{machineId:'a',path:'/runs/r1/events',error:{message:'Disconnected before session.'}});});
+ await page.getByRole('button',{name:'Resume',exact:true}).click();
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='stream').length)).toBe(2);
+ await page.evaluate(()=>{const w=window as any;w.__run.sessionId='new-s';w.__emit('fleet-stream',{machineId:'a',path:'/runs/r1/events',id:1,event:{kind:'session',sessionId:'new-s',seq:1}});});
+ await expect(page.locator('.ps-breadcrumb-current')).toHaveText('New session');await expect(page.getByText('New session history.',{exact:true})).toBeVisible();
+ await sendDraft(page,'Follow up');
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='api'&&c.method==='POST').at(-1).path)).toBe('/api/v1/sessions/new-s/messages');
+ expect(errors).toEqual([]);
+});
+test('only pending questions can be answered and confirm sends a boolean',async({page})=>{
+ await workspace(page);await runBridge(page);await sendDraft(page);
+ await expect.poll(()=>page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='stream').length)).toBe(1);
+ await page.evaluate(()=>{const w=window as any;w.__run.interactions=['pending','answered','cancelled','interrupted'].map((status,i)=>({id:`q${i}`,method:'confirm',title:`Question ${status}`,status}));w.__emit('fleet-stream',{machineId:'a',path:'/runs/r1/events',id:1,event:{kind:'interaction',seq:1}});});
+ await expect(page.getByRole('heading',{name:'Question pending'})).toBeVisible();await expect(page.locator('.ps-question')).toHaveCount(1);
+ await page.getByRole('button',{name:'Confirm',exact:true}).click();
+ expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='api'&&c.method==='POST').at(-1).body)).toEqual({id:'q0',response:{confirmed:true}});
+ await expect(page.locator('.ps-question')).toHaveCount(0);
+});

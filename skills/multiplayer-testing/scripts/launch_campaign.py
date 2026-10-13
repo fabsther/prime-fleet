@@ -154,11 +154,11 @@ def main():
     project = project_named(cli, source, args.project)
     plan = plan_named(roadmap(cli, source, project), args.plan)
     result = launch(cli, machines, source, project, plan, args.campaign_id or uuid.uuid4().hex[:12])
+    output(result)  # Keep accepted run IDs even if the optional manifest cannot be saved.
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x", encoding="utf-8") as file:
             json.dump(result, file, ensure_ascii=False, indent=2)
-    output(result)
 
 
 if __name__ == "__main__":

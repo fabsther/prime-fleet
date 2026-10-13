@@ -13,11 +13,6 @@ export type Api = (machine: string, method: string, path: string, body?: unknown
 export const api: Api = (machine, method, path, body) => invoke('api', {
   machineId: machine, method, path: path.startsWith('/api/v1/') ? path : `/api/v1${path.startsWith('/') ? '' : '/'}${path}`, body: body ?? null,
 });
-export interface SseEvent { streamId: string; machineId: string; path: string; event: unknown; id?: number }
-export interface SseEnd { streamId: string; machineId: string; path: string; error?: string }
-export const stream = (machineId: string, path: string, after = 0) => invoke<string>('stream', { machineId, path, after });
-export const stopStream = (streamId: string) => invoke<void>('stop_stream', { streamId });
-export const download = (machineId: string, path: string, filename: string) => invoke<{ path: string; bytes: number }>('download', { machineId, path, filename });
 export const encodeId = encodeURIComponent;
 export const projectPath = (id: string) => `/api/v1/projects/${encodeId(id)}`;
 export const sessionPath = (id: string) => `/api/v1/sessions/${encodeId(id)}`;
@@ -38,7 +33,6 @@ async function pages<T>(machine: string, path: string, transport: Api): Promise<
     offset = page.nextOffset;
   } while (true);
 }
-export const getMachine = (machine: string, transport: Api = api): Promise<{ machineId: string; name: string; capabilities: string[]; [key: string]: unknown }> => transport(machine, 'GET', '/api/v1/machine');
 export const listProjects = (machine: string, transport: Api = api) => pages<Project>(machine, '/api/v1/projects', transport);
 export const listSessions = (machine: string, project: string, transport: Api = api) => pages<Session>(machine, `${projectPath(project)}/sessions`, transport);
 export const listRuns = (machine: string, transport: Api = api) => pages<Run>(machine, '/api/v1/runs', transport);
@@ -49,7 +43,6 @@ export interface FileRef { id: string; name?: string; path?: string; [key: strin
 export const listFiles = (machine: string, session: string, transport: Api = api) => pages<FileRef>(machine, `${sessionPath(session)}/files`, transport);
 export const stopRun = (machine: string, run: string, transport: Api = api) => transport(machine, 'POST', `${runPath(run)}/stop`, {});
 export const sendMessage = (machine: string, session: string, message: string, mode: 'steer' | 'follow_up' = 'steer', transport: Api = api) => transport(machine, 'POST', `${sessionPath(session)}/messages`, { requestId: newRequestId(), mode, message });
-export const answerInteraction = (machine: string, run: string, id: string, response: { cancelled: true } | { confirmed: boolean } | { value: string }, transport: Api = api) => transport(machine, 'POST', `${runPath(run)}/interactions`, { id, response });
 export const getComputerUse = (machine: string, transport: Api = api): Promise<ComputerState> => transport(machine, 'GET', '/api/v1/computer-use');
 export type ComputerMutation = { enabled: boolean; expectedRevision: number } & ({ runId: string; sessionId?: never } | { sessionId: string; runId?: never });
 export const setComputerUse = (machine: string, body: ComputerMutation, transport: Api = api): Promise<ComputerState> => transport(machine, 'POST', '/api/v1/computer-use', body);
@@ -59,36 +52,7 @@ export const syncProject = (machine: Machine, projectId: string, sessionId?: str
   return transport(machine.id, 'POST', `${projectPath(projectId)}/sync`, sessionId ? { sessionId } : {});
 };
 
-// Request shapes from the public v1 OpenAPI contract. No private native DTOs.
-export type RoadmapStepInput = { id?: string; text: string; note?: string; done?: boolean; children?: (RoadmapStepInput)[] };
-export type BacklogEntryInput = { text: string; note?: string };
-export type RoadmapMutation =
-  { action: "init"; expectedRevision: number }
-  | { action: "vision"; expectedRevision: number; text: string }
-  | { action: "milestone.create"; expectedRevision: number; title: string; summary?: string; status?: "planned" | "active" | "done" }
-  | { action: "milestone.patch"; expectedRevision: number; milestoneId: string; title?: string; summary?: string; status?: "planned" | "active" | "done" }
-  | { action: "milestone.delete"; expectedRevision: number; milestoneId: string }
-  | { action: "milestone.move"; expectedRevision: number; milestoneId: string; targetId: string; position: "before" | "after" }
-  | { action: "plan.create"; expectedRevision: number; title: string; summary?: string; status?: "active" | "done" | "paused" | "abandoned"; milestone?: string | null; color?: "transparent" | "#0d9488" | "#db2777" | "#4f46e5" | "#65a30d" | "#ea580c"; sessions?: (string)[]; steps?: (RoadmapStepInput)[] }
-  | { action: "plan.patch"; expectedRevision: number; planId: string; title?: string; summary?: string; status?: "active" | "done" | "paused" | "abandoned"; milestone?: string | null; color?: "transparent" | "#0d9488" | "#db2777" | "#4f46e5" | "#65a30d" | "#ea580c" }
-  | { action: "plan.attach"; expectedRevision: number; planId: string; sessionId: string }
-  | { action: "plan.delete"; expectedRevision: number; planId: string }
-  | { action: "plan.archive"; expectedRevision: number; planId: string }
-  | { action: "plan.unarchive"; expectedRevision: number; planId: string }
-  | { action: "plan.steps"; expectedRevision: number; planId: string; steps: (RoadmapStepInput)[] }
-  | { action: "step.add"; expectedRevision: number; planId: string; text: string; note?: string; parentId?: string | null; afterId?: string }
-  | { action: "step.edit"; expectedRevision: number; planId: string; stepId: string; text?: string; note?: string }
-  | { action: "step.check"; expectedRevision: number; planId: string; stepId?: string; stepIds?: (string)[]; done: boolean; note?: string; comment?: string; sessionId?: string }
-  | { action: "step.remove"; expectedRevision: number; planId: string; stepId: string }
-  | { action: "step.move"; expectedRevision: number; planId: string; stepId: string; direction?: "up" | "down" | "indent" | "outdent"; targetId?: string; position?: "before" | "after" | "inside" }
-  | { action: "journal.add"; expectedRevision: number; planId: string; text: string }
-  | { action: "backlog.add"; expectedRevision: number; items?: (BacklogEntryInput)[]; notes?: (BacklogEntryInput)[] }
-  | { action: "backlog.edit"; expectedRevision: number; number: number; text?: string; note?: string }
-  | { action: "backlog.set"; expectedRevision: number; numbers: (number)[]; done: boolean }
-  | { action: "backlog.remove"; expectedRevision: number; numbers: (number)[] }
-  | { action: "backlog.move"; expectedRevision: number; number: number; targetNumber: number; position: "before" | "after" }
-  | { action: "backlog.convert"; expectedRevision: number; number: number; kind: "item" | "note" };
-
+// Public work targets are shared by the launch controllers.
 export type WorkTarget = { kind: 'plan'; planId: string; stepId?: string } | { kind: 'milestone'; milestoneId: string } | { kind: 'backlog'; number: number };
 export interface RoadmapWork {
   requestId: string; expectedRevision: number; targets: WorkTarget[]; instructions?: string;
@@ -99,10 +63,6 @@ const needsReread = (error: unknown) => {
   const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : undefined;
   return status === undefined || status === 409 || status >= 500;
 };
-export async function mutateRoadmap(machine: string, project: string, body: RoadmapMutation, transport: Api = api): Promise<RoadmapEnvelope> {
-  try { return await transport(machine, 'POST', `${projectPath(project)}/roadmap/mutations`, body); }
-  catch (error) { if (needsReread(error)) await getRoadmap(machine, project, transport).catch(() => undefined); throw error; }
-}
 export async function workRoadmap(machine: string, project: string, body: RoadmapWork, transport: Api = api): Promise<WorkAccepted> {
   if (body.instructions && body.instructions.length > 4000) throw new Error('Instructions exceed 4000 characters.');
   if (!body.targets.length || body.targets.length > 20) throw new Error('Select 1–20 work targets.');
@@ -142,10 +102,13 @@ export async function continueConversation(options: ContinueOptions, transport: 
     const fresh = await getRun(owner.id, active.id, transport);
     active = isActiveRun(fresh) ? fresh : undefined;
   }
-  if (!active) {
-    const visible = await Promise.all([...new Set([source.id, target.id])].map(id => listRuns(id, transport)));
-    active = visible.flat().find(run => run.sessionId === session.id && isActiveRun(run));
-  }
+  const hosts = machines.filter(machine => project.copies.some(copy => belongsToMachine(copy.machineId, machine)));
+  if (hosts.some(machine => !isOnline(machine))) throw new Error('A project machine is offline. Inspect its run before continuing elsewhere.');
+  const visible = await Promise.all(hosts.map(machine => listRuns(machine.id, transport)));
+  const live = visible.flat().filter(run => run.sessionId === session.id && isActiveRun(run));
+  if (active && !live.some(run => run.id === active!.id && run.machineId === active!.machineId)) live.push(active);
+  if (live.length > 1) throw new Error('This conversation has multiple active runs. Stop the extra runs in Studio before continuing.');
+  active = live[0];
   if (active) {
     const owner = machines.find(m => belongsToMachine(active!.machineId, m));
     if (!owner) throw new Error('Active run machine is unknown.');
