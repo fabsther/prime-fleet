@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 // Native IPC is mocked only in tests; the shipped app never uses browser fetch.
-test.beforeEach(async({page})=>{
- await page.addInitScript(()=>{
+test.beforeEach(async({page},testInfo)=>{
+ await page.addInitScript((english)=>{
+  if(english && localStorage.getItem('locale') === null) localStorage.setItem('locale','en');
   const machines=[{id:'a',name:'ALIEN18',url:'https://alien18.example.ts.net'},{id:'b',name:'BAGUETTE',url:'https://baguette.example.ts.net'}];
   (window as any).__TAURI_INTERNALS__={invoke:async(cmd:string,args:any)=>{
    if(cmd==='machines')return machines;
@@ -18,7 +19,7 @@ test.beforeEach(async({page})=>{
    if(args.path.includes('/projects'))return items([{id:`p-${m.id}`,name:'Pieton',syncId:'shared',machineId:`studio-${m.id}`,exists:true}]);
    throw Error(`Unmocked path ${args.path}`);
   }};
- });
+ },!testInfo.title.startsWith('French is the default'));
 });
 for(const [name,width,height,theme] of [['desktop-dark',1440,900,'dark'],['desktop-light',1440,900,'light'],['tablet-landscape',1100,800,'dark'],['tablet-portrait',800,1100,'dark'],['phone',390,844,'dark']] as const){
  test(name,async({page})=>{
@@ -31,7 +32,7 @@ for(const [name,width,height,theme] of [['desktop-dark',1440,900,'dark'],['deskt
   await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
   await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
   await expect(page.getByLabel('Machine',{exact:true})).toHaveValue('studio-a');
-  if(width<=760)await expect(page.locator('.ps-sidebar')).toHaveCSS('transform','matrix(1, 0, 0, 1, -245, 0)');
+  if(width<=760)await expect(page.locator('.ps-sidebar')).toBeHidden();
   const zones=page.locator('.fleet-zone');
   await expect(zones.nth(1))[width<=760?'toBeHidden':'toBeVisible']();
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);
@@ -177,7 +178,7 @@ test('token input rejects the Android trailing backtick and saves only completed
  const dialog=page.getByRole('dialog'),token=dialog.getByLabel(/^Token/),save=dialog.getByRole('button',{name:'Save connection'});
  await dialog.getByLabel('Name',{exact:true}).fill('Tablet regression');await dialog.getByLabel('Tailscale address').fill('https://tablet.example.ts.net');
  for(const invalid of ['pa_synthetic`','pa_synthetic ','wrong-prefix']){
-  await token.fill(invalid);await save.click();await expect(page.getByText('Token invalide : format pa_[A-Za-z0-9_-]+ requis, sans espace ni caractère ajouté.')).toBeVisible();
+  await token.fill(invalid);await save.click();await expect(page.getByText('Invalid token: use pa_[A-Za-z0-9_-]+ without spaces or extra characters.',{exact:false})).toBeVisible();
   expect(await page.evaluate(()=>(window as any).__savedTokens)).toEqual([]);await expect(dialog).toBeVisible();
  }
  await token.fill('');
@@ -186,4 +187,79 @@ test('token input rejects the Android trailing backtick and saves only completed
  await token.evaluate((input:HTMLInputElement)=>{input.value='pa_synthetic_valid';input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'pa_synthetic_valid'}));});
  await expect(save).toBeEnabled();await save.click();await expect(dialog).not.toBeVisible();
  expect(await page.evaluate(()=>(window as any).__savedTokens)).toEqual(['pa_synthetic_valid']);
+});
+
+
+test('French is the default and an English switch persists without translating content',async({page})=>{
+ await page.setViewportSize({width:1440,height:900});await page.goto('/');
+ await expect(page.locator('html')).toHaveAttribute('lang','fr');
+ await expect(page.getByRole('button',{name:'Ajouter une machine'})).toBeVisible();
+ await expect(page.locator('.ps-header').getByLabel('Langue')).toHaveValue('fr');
+ await page.locator('.ps-row').filter({hasText:'Pieton'}).click();
+ await expect(page.getByLabel('Panneau 2')).toHaveValue('Roadmap');
+ await expect(page.getByText('1/2 tâches cochées',{exact:true})).toBeVisible();
+ await expect(page.getByText('Actif',{exact:true})).toBeVisible();
+ await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
+ await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
+ await page.locator('.ps-header').getByLabel('Langue').selectOption('en');
+ await expect(page.locator('html')).toHaveAttribute('lang','en');
+ await expect(page.getByRole('button',{name:'Add a plan',exact:true})).toBeVisible();
+ await expect(page.getByText('1/2 tasks checked',{exact:true})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
+ await expect(page.getByLabel('Pane 2')).toHaveValue('Roadmap');
+ await page.reload();
+ await expect(page.locator('.ps-header').getByLabel('Language')).toHaveValue('en');
+ await expect(page.getByRole('button',{name:'Add a machine'})).toBeVisible();
+ expect(await page.evaluate(()=>localStorage.getItem('locale'))).toBe('en');
+});
+
+test('language changes keep connection forms, conversation drafts, and Roadmap editors',async({page})=>{
+ await page.setViewportSize({width:1440,height:900});
+ await page.goto('/');await expect(page.getByRole('heading',{name:'ALIEN18'})).toBeVisible();
+ await page.getByRole('button',{name:'Add a machine'}).click();
+ const connection=page.getByRole('dialog');
+ await connection.getByLabel('Name',{exact:true}).fill('Unchanged name');
+ await connection.getByLabel('Tailscale address').fill('https://unchanged.example.ts.net');
+ await connection.getByLabel(/^Token/).fill('pa_synthetic_unchanged');
+ await connection.getByLabel('Language').selectOption('fr');
+ await expect(connection.getByLabel('Nom',{exact:true})).toHaveValue('Unchanged name');
+ await expect(connection.getByLabel('Adresse Tailscale')).toHaveValue('https://unchanged.example.ts.net');
+ await expect(connection.getByLabel(/^Token/)).toHaveValue('pa_synthetic_unchanged');
+ await connection.getByRole('button',{name:'Annuler'}).click();
+ await page.locator('.ps-row').filter({hasText:'Pieton'}).click();
+ await page.locator('.ps-subrow').filter({hasText:'Prepare the cooperative test'}).click();
+ await page.getByLabel('Message',{exact:true}).fill('Draft @machine: ALIEN18 stays raw.');
+ await page.locator('.ps-plan-title').filter({hasText:'Cooperative test'}).click();
+ await page.getByRole('button',{name:'Modifier Cooperative test',exact:true}).click();
+ const editor=page.getByRole('dialog');
+ await editor.getByLabel('Titre',{exact:true}).fill('Unchanged plan');
+ await editor.getByLabel('Résumé',{exact:true}).fill('@campaign\nKeep this note.');
+ await editor.getByLabel('Statut',{exact:true}).selectOption('paused');
+ await editor.getByLabel('Langue').selectOption('en');
+ await expect(editor.getByRole('heading',{name:'Edit plan'})).toBeVisible();
+ await expect(editor.getByLabel('Title',{exact:true})).toHaveValue('Unchanged plan');
+ await expect(editor.getByLabel('Summary',{exact:true})).toHaveValue('@campaign\nKeep this note.');
+ await expect(editor.getByLabel('Status',{exact:true})).toHaveValue('paused');
+ await expect(editor.getByRole('option',{name:'Paused',exact:true})).toHaveAttribute('value','paused');
+ await expect(page.getByLabel('Message',{exact:true})).toHaveValue('Draft @machine: ALIEN18 stays raw.');
+ await expect(page.getByLabel('Pane 2')).toHaveValue('Roadmap');
+ await expect(page.locator('.ps-plan-title').filter({hasText:'Cooperative test'})).toHaveAttribute('aria-expanded','true');
+ await editor.getByRole('button',{name:'Cancel'}).click();
+ await expect(page.getByRole('heading',{name:'Connections are ready'})).toBeVisible();
+});
+
+
+test('known native errors switch in place while opaque remote text stays unchanged',async({page})=>{
+ await page.setViewportSize({width:1440,height:900});await page.goto('/');
+ await expect(page.getByRole('heading',{name:'ALIEN18'})).toBeVisible();
+ await page.evaluate(()=>{const w=window as any,base=w.__TAURI_INTERNALS__.invoke;w.__mockError='Machine injoignable (vérifiez Tailscale)';w.__TAURI_INTERNALS__.invoke=async(cmd:string,args:any)=>{if(cmd==='machines')throw {message:w.__mockError};return base(cmd,args);};});
+ await page.locator('.ps-header').getByLabel('Language').selectOption('fr');
+ await page.locator('.ps-header').getByRole('button',{name:'Actualiser la flotte'}).click();
+ await expect(page.locator('.ps-banner--error')).toContainText('Machine injoignable. Vérifiez Tailscale.');
+ await page.locator('.ps-header').getByLabel('Langue').selectOption('en');
+ await expect(page.locator('.ps-banner--error')).toContainText('Machine is unreachable. Check Tailscale.');
+ await page.evaluate(()=>{(window as any).__mockError='Remote report: keep @machine: ALIEN18 and /tmp/report.md unchanged.';});
+ await page.locator('.ps-header').getByRole('button',{name:'Refresh fleet'}).click();
+ await page.locator('.ps-header').getByLabel('Language').selectOption('fr');
+ await expect(page.locator('.ps-banner--error')).toContainText('Remote report: keep @machine: ALIEN18 and /tmp/report.md unchanged.');
 });
