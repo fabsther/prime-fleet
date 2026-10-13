@@ -101,3 +101,5 @@ Parent reports CONNECTED with the final strict-input APK. The apparent token cor
 - Current `app/src-tauri/target/debug/prime-fleet.exe` · 18,454,016 bytes · SHA-256 `3c0d29b4245e3a2d922aca6fbf8406067bf2e23fabd986120a3a0903ff57575d`.
 - Current `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,500,352 bytes · SHA-256 `60c64fe5f338216872a3a88984d7c185efc35213c66d7321772cd96335bf2509`.
 - Current `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,056,525 bytes · SHA-256 `4392158d7116ebf630cc505bce86a14878fa4c0083d4ff75c8427fb8efc020bd`.
+
+CLI follow-up `status` now recomputes paginated same-project active-run conflicts and fresh global ownership, caches shared reads, retains original accepted identity and request IDs, allows only null→assigned session promotion, and never mutates the manifest or sends POST. Canonical machine/project/run ownership is required. Final skill-safety suite: 45/45, including 10 status regressions. APK/Windows hashes above remain current; these last changes are Python-only.
