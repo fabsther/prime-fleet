@@ -28,7 +28,8 @@ Limits: 1..8 unchecked players, at most two per PC, at most one `@gui` player pe
 4. **Actions:** numbered actions for each role, each with an observable criterion (HUD, log marker, screenshot). Use human-like pacing and vary actions within these bounds.
 5. **Evidence:** each player writes `outputs/multitest/<campaignId>/player-<k>.md`, with timings, steps, logs, screenshot paths and failures, and cites the path in its final answer. The launcher injects the exact per-player path.
 6. **End:** close only game processes that player started. Respect AGENTS.md, saves/assets and forbidden actions.
-7. **Computer Use:** GUI players wait at most two minutes for authorization, then report and stop. They never enable it themselves. Set backend/model locally in Studio; Fleet does not change them.
+7. **Computer Use:** GUI players wait at most two minutes for authorization only if there is no other owner, then report and stop. An actual other owner means an immediate conflict: report and STOP without input or takeover. Players never enable it themselves. Set backend/model locally in Studio; Fleet does not change them.
+8. **Existing activity:** every player must report and STOP if another agent session owns Computer Use **or a game instance already runs ON THIS MACHINE**. A guest joining a remote host is not a local game conflict. Never take control, stop the other session, or close its game. The launcher injects this instruction for all players, including non-GUI players; the actual player checks game processes, not a guessed Fleet game-process API.
 
 ## Launch
 
@@ -38,9 +39,9 @@ python skills/multiplayer-testing/scripts/launch_campaign.py --machine ALIEN18 -
 
 This is a dry-run: real GETs, zero POSTs (even sync). Review it and ask the user to approve. Then add `--confirmed --output outputs/multitest/a1b2c3d4e5f6/launch.json`. The output path must not exist. Keep the manifest: accepted run identities are needed for follow-up. Do not repeat an accepted launch; requestId retention is one hour and is lost on restart.
 
-The launcher validates all players before writes, then reads global Computer Use on GUI machines. Any owner, including a hidden owner, busy controller or uncertain cleanup blocks preflight. It never revokes or takes over another target. Without `computer-use` capability it gives a manual reminder and never calls that route; the player still has a two-minute wait limit.
+Before any write (including sync), the launcher validates all players and project copies, checks global Computer Use on `@gui` machines, and reads **all pages of `GET /runs` on every target PC**. It filters runs by that PC's local project ID and blocks on any active run. Unrelated projects and terminal runs do not block; unknown status is active, and unknown run identity blocks. Any Computer Use owner, including a hidden owner, busy controller, missing ownership state or uncertain cleanup blocks preflight. It never revokes or takes over another target. Without `computer-use` capability it gives a manual reminder and never calls that route; the player still has a two-minute wait limit.
 
-It syncs only PCs that advertise `sync`, then requires matching target campaign content. Dispatch is sequential per PC and parallel across PCs. Before **each** dispatch it rereads the target Roadmap and uses its `expectedRevision`. Its requestId is `cmp_<12 hex campaignId>_<stepId>`, truncated to 100; collisions are rejected. Header:
+It syncs only PCs that advertise `sync`, then requires matching target campaign content. Dispatch is sequential per PC and parallel across PCs. Before **each** dispatch, after sync, it rereads the target Roadmap and uses its `expectedRevision`, checks Computer Use if needed, and performs a fresh same-project run check immediately before the work POST. Its requestId is `cmp_<12 hex campaignId>_<stepId>`, truncated to 100; collisions are rejected. Header:
 
 ```text
 Campagne de test <campaignId> — joueur <k>/<N> : <role> (machine <M>).
@@ -49,7 +50,13 @@ Consignes communes :
 <summary without @campaign>
 ```
 
-This goes in `instructions`; Studio adds the step text/note itself. After a GUI player is accepted, Fleet rereads ownership and POSTs `/computer-use` with `{enabled:true,expectedRevision,runId}` only if free and supported. A race or error is recorded with the accepted run, and other players continue. No automatic retries or step checks.
+This goes in `instructions`; Studio adds the step text/note itself. Immediately after **each** acceptance, Fleet checks project runs again. It excludes only the exact run IDs accepted in this invocation of this campaign, so two own players on a PC are allowed. Sharing a session ID, campaign ID or requestId never excuses another active run.
+
+For an accepted GUI player, Fleet rereads ownership and POSTs `/computer-use` with `{enabled:true,expectedRevision,runId}` only if free and supported. It then performs a fresh GET to verify enabled ownership of that exact project and run, and checks project runs again. The manifest records `status`, `runChecks`, and `computerUseOwnershipCheck`. A raced conflict retains the accepted run and requestId with an error and warning; its status stays `accepted`, not `not-dispatched`. Remaining players on that PC are blocked, and pre-grant conflicts withhold Computer Use. Other PCs can continue. No takeover, revocation of another owner, stop, automatic retry, or step check is used to resolve launch conflicts. An uncertain work write is marked `unknown` and also blocks that PC's remaining dispatches.
+
+Dry-run shows read-only preflight and pre-dispatch checks plus planned work. Post-acceptance and post-grant checks are marked `unavailable-until-confirmation`; they have not happened. No POST is sent.
+
+**Non-atomic limit:** API v1 has no distributed project/desktop lock. A run or owner can race the last check or appear minutes after the launcher exits. The CLI cannot monitor in the background after exit. Players must obey the STOP instruction throughout execution. Reread `status` below and the Studio state before any human-approved follow-up; never replay an uncertain launch or take over an old session.
 
 ## Follow-up
 

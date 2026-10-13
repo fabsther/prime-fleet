@@ -44,6 +44,10 @@ class FakeCLI(fleet.CLI):
         self.messages = {m: [{"id": "msg", "role": "assistant", "text": "Done"}] for m in ("A", "B")}
         self.fail_work = set()
         self.steal_after_work = False
+        self.before_runs = None
+        self.after_work = None
+        self.after_grant = None
+        self.after_sync = None
 
     def command(self, *args):
         self.calls.append(args)
@@ -71,6 +75,8 @@ class FakeCLI(fleet.CLI):
                 elif path.endswith("/messages"):
                     items = self.messages[machine]
                 elif path == "/runs":
+                    if self.before_runs:
+                        self.before_runs(machine)
                     items = [r for r in self.runs.values() if r["machineId"] == machine]
                 elif path.endswith("/files"):
                     items = []
@@ -82,6 +88,8 @@ class FakeCLI(fleet.CLI):
             return copy.deepcopy(value)
         body = json.loads(payload[0])
         if path.endswith("/sync"):
+            if self.after_sync:
+                self.after_sync(machine)
             return {"state": "unspecified", "changed": False}
         if path.endswith("/roadmap/mutations"):
             doc = self.docs[machine]
@@ -99,6 +107,8 @@ class FakeCLI(fleet.CLI):
             run = {"id": rid, "sessionId": "s" + rid, "projectId": "P" + machine,
                    "machineId": machine, "status": "running"}
             self.runs[rid] = run
+            if self.after_work:
+                self.after_work(machine, run)
             return {"accepted": True, "run": copy.deepcopy(run)} if path.endswith("/work") else copy.deepcopy(run)
         if path == "/computer-use":
             assert body["expectedRevision"] == self.cu[machine]["revision"]
@@ -109,7 +119,10 @@ class FakeCLI(fleet.CLI):
                 self.cu[machine]["owner"] = None
             self.cu[machine]["enabled"] = body["enabled"]
             self.cu[machine]["revision"] += 1
-            return copy.deepcopy(self.cu[machine])
+            response = copy.deepcopy(self.cu[machine])
+            if body["enabled"] and self.after_grant:
+                self.after_grant(machine, run)
+            return response
         if path.endswith("/stop"):
             assert body == {}
             self.runs[path.split("/")[2]].update(status="stopped", endedAt="now")
@@ -133,6 +146,17 @@ def run_main(module, fake, args):
     with patch.object(module, "CLI", return_value=fake), patch.object(sys, "argv", ["script", *args]), contextlib.redirect_stdout(io.StringIO()) as stream:
         module.main()
     return json.loads(stream.getvalue())
+
+
+def same_pc(fake, gui=False):
+    for index, step in enumerate(fake.plan["steps"]):
+        step["note"] = "@machine: A" + ("\n@gui" if gui and index == 0 else "")
+    fake.docs["A"]["plans"] = [copy.deepcopy(fake.plan)]
+
+
+def other_run(fake, machine="A", project=None, status="running", rid="old", session="old-session"):
+    fake.runs[rid] = {"id": rid, "machineId": machine, "projectId": project or "P" + machine,
+                      "status": status, "sessionId": session}
 
 
 class SafetyTests(unittest.TestCase):
@@ -327,6 +351,235 @@ class SafetyTests(unittest.TestCase):
         control.control(fake, manifest, "send", "Update")
         control.control(fake, manifest, "stop")
         self.assertEqual(fake.posts(), [])
+
+
+    def test_preexisting_project_run_blocks_all_writes_including_sync(self):
+        for gui in (False, True):
+            fake = FakeCLI(True)
+            for info in fake.info.values():
+                info["capabilities"].append("sync")
+            if not gui:
+                for step in fake.plan["steps"]:
+                    step["note"] = step["note"].replace("\n@gui", "")
+            other_run(fake, "B")
+            with self.subTest(gui=gui), self.assertRaisesRegex(fleet.FleetError, "Active same-project run"):
+                launch(fake)
+            self.assertEqual(fake.posts(), [])
+
+    def test_project_run_preflight_reads_all_targets_before_first_write(self):
+        fake = FakeCLI(True)
+        fake.info["A"]["capabilities"].append("sync")
+        launch(fake)
+        first_post = next(i for i, c in enumerate(fake.calls) if len(c) > 2 and c[2] == "POST")
+        inspected = {c[1] for c in fake.calls[:first_post] if len(c) > 3 and "/runs?" in c[3]}
+        self.assertEqual(inspected, {"A", "B"})
+
+    def test_cross_project_and_terminal_runs_are_ignored(self):
+        fake = FakeCLI(True)
+        other_run(fake, project="different")
+        for index, status in enumerate(("completed", "failed", "stopped", "cancelled", "canceled", "DONE", "finished", "ERROR")):
+            other_run(fake, status=status, rid="done" + str(index))
+        other_run(fake, status="future-terminal", rid="ended")
+        fake.runs["ended"]["endedAt"] = "now"
+        result = launch(fake)
+        self.assertFalse(any(p.get("error") for p in result["players"]))
+        self.assertTrue(all(p["status"] == "accepted" for p in result["players"]))
+
+    def test_unknown_active_status_blocks_and_runs_are_paginated(self):
+        fake = FakeCLI(True)
+        for index in range(205):
+            other_run(fake, project="different", rid="other" + str(index))
+        other_run(fake, status="unknown-future-status")
+        with self.assertRaises(fleet.FleetError):
+            launch(fake)
+        self.assertEqual(fake.posts(), [])
+        self.assertTrue(any("/runs?limit=200&offset=200" in c[3] for c in fake.calls if len(c) > 3))
+
+    def test_fresh_project_run_after_preflight_blocks_dispatch(self):
+        fake = FakeCLI(True)
+        same_pc(fake, gui=True)
+        reads = []
+        def resume(machine):
+            reads.append(machine)
+            if len(reads) == 2:
+                other_run(fake)
+        fake.before_runs = resume
+        result = launch(fake)
+        self.assertEqual(fake.posts(), [])
+        self.assertEqual([p["status"] for p in result["players"]], ["not-dispatched", "not-dispatched"])
+        self.assertEqual(result["players"][0]["runChecks"][-1]["status"], "blocked")
+        self.assertIn("group blocked", result["players"][1]["error"])
+
+    def test_project_run_after_sync_blocks_dispatch(self):
+        fake = FakeCLI(True)
+        same_pc(fake)
+        fake.info["A"]["capabilities"].append("sync")
+        fake.after_sync = lambda machine: other_run(fake, machine)
+        result = launch(fake)
+        self.assertTrue(all(p.get("error") for p in result["players"]))
+        self.assertEqual([c[3].rsplit("/", 1)[-1] for c in fake.posts()], ["sync"])
+
+    def test_own_two_exact_accepted_run_ids_are_allowed(self):
+        fake = FakeCLI(True)
+        same_pc(fake, gui=True)
+        result = launch(fake)
+        self.assertFalse(any(p.get("error") for p in result["players"]))
+        self.assertEqual(len({p["run"]["id"] for p in result["players"]}), 2)
+        self.assertEqual(result["players"][0]["computerUseOwnershipCheck"]["status"], "verified")
+        for player in result["players"]:
+            self.assertTrue(all(c["status"] == "clear" for c in player["runChecks"]))
+
+    def test_postacceptance_conflict_same_session_retains_identity_blocks_next(self):
+        fake = FakeCLI(True)
+        same_pc(fake, gui=True)
+        fake.after_work = lambda machine, run: other_run(fake, machine, session=run["sessionId"])
+        result = launch(fake)
+        first, second = result["players"]
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(first["run"]["id"], first["work"]["run"]["id"])
+        self.assertEqual(first["requestId"], "cmp_a1b2c3d4e5f6_a")
+        self.assertEqual(first["runChecks"][-1]["phase"], "after-acceptance")
+        self.assertEqual(first["runChecks"][-1]["conflictingRunIds"], ["old"])
+        self.assertIn("Active same-project run", first["error"])
+        self.assertEqual(second["status"], "not-dispatched")
+        self.assertTrue(result["warnings"])
+        self.assertEqual([c[3].rsplit("/", 1)[-1] for c in fake.posts()], ["work"])
+
+    def test_owner_changes_after_grant_are_reported_without_takeover(self):
+        for change in ("changed", "same-session-other-run", "hidden", "unknown", "disabled", "cleanup"):
+            fake = FakeCLI(True)
+            same_pc(fake, gui=True)
+            def steal(machine, run):
+                state = fake.cu[machine]
+                if change == "changed":
+                    state["owner"] = {"projectId": "other", "runId": "other"}
+                elif change == "same-session-other-run":
+                    state["owner"]["runId"] = "different"
+                elif change == "hidden":
+                    state["ownerHidden"] = True
+                elif change == "unknown":
+                    state.pop("ownerHidden")
+                elif change == "disabled":
+                    state["enabled"] = False
+                else:
+                    state["cleanupPending"] = True
+            fake.after_grant = steal
+            result = launch(fake)
+            first, second = result["players"]
+            with self.subTest(change=change):
+                self.assertEqual(first["status"], "accepted")
+                self.assertTrue(first["run"]["id"])
+                self.assertIn("error", first)
+                self.assertIn(first["computerUseOwnershipCheck"]["status"], {"blocked", "unavailable"})
+                self.assertEqual(second["status"], "not-dispatched")
+                self.assertEqual([c[3].rsplit("/", 1)[-1] for c in fake.posts()], ["work", "computer-use"])
+                self.assertTrue(json.loads(fake.posts()[-1][4])["enabled"])
+
+    def test_unknown_computer_state_blocks_preflight_without_writes(self):
+        for field in ("owner", "ownerHidden", "enabled", "supported", "revision", "cleanupFailed"):
+            fake = FakeCLI(True)
+            fake.cu["A"].pop(field)
+            with self.subTest(field=field), self.assertRaisesRegex(fleet.FleetError, "unknown"):
+                launch(fake)
+            self.assertEqual(fake.posts(), [])
+
+        for owner in ({}, [], "unknown"):
+            fake = FakeCLI(True)
+            fake.cu["A"]["owner"] = owner
+            with self.subTest(owner=owner), self.assertRaisesRegex(fleet.FleetError, "unknown"):
+                launch(fake)
+            self.assertEqual(fake.posts(), [])
+
+    def test_healthy_postgrant_status_and_fresh_get(self):
+        fake = FakeCLI(True)
+        result = launch(fake)
+        for player in result["players"]:
+            check = player["computerUseOwnershipCheck"]
+            self.assertEqual(check["status"], "verified")
+            self.assertEqual(check["phase"], "after-grant")
+            self.assertEqual(check["state"]["owner"]["runId"], player["run"]["id"])
+            grant = next(i for i, c in enumerate(fake.calls) if len(c) > 3 and c[1] == player["machine"]
+                         and c[2:4] == ("POST", "/api/v1/computer-use"))
+            self.assertTrue(any(c == ("api", player["machine"], "GET", "/api/v1/computer-use") for c in fake.calls[grant + 1:]))
+
+    def test_postgrant_project_run_conflict_preserves_run_without_revoke(self):
+        fake = FakeCLI(True)
+        same_pc(fake, gui=True)
+        fake.after_grant = lambda machine, run: other_run(fake, machine)
+        result = launch(fake)
+        first, second = result["players"]
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(first["runChecks"][-1]["phase"], "after-grant")
+        self.assertEqual(first["runChecks"][-1]["status"], "blocked")
+        self.assertTrue(first["error"])
+        self.assertEqual(second["status"], "not-dispatched")
+        self.assertEqual([c[3].rsplit("/", 1)[-1] for c in fake.posts()], ["work", "computer-use"])
+
+    def test_dry_run_exposes_unavailable_postdispatch_checks_and_stop_instruction(self):
+        fake = FakeCLI()
+        result = launch(fake)
+        self.assertEqual(fake.posts(), [])
+        self.assertTrue(all(c["status"] == "clear" for c in result["preflight"]))
+        for player in result["players"]:
+            self.assertEqual(player["status"], "planned")
+            self.assertNotIn("run", player)
+            self.assertEqual(player["runChecks"][-1]["status"], "unavailable-until-confirmation")
+            self.assertEqual(player["computerUseOwnershipCheck"]["status"], "unavailable-until-confirmation")
+            instructions = player["work"]["body"]["instructions"]
+            self.assertIn("another agent session owns Computer Use OR a game instance already runs ON THIS MACHINE", instructions)
+            self.assertIn("report and STOP without taking control", instructions)
+
+    def test_unknown_run_identity_blocks_without_writes(self):
+        for field in ("id", "projectId"):
+            fake = FakeCLI(True)
+            other_run(fake)
+            fake.runs["old"].pop(field)
+            with self.subTest(field=field), self.assertRaisesRegex(fleet.FleetError, "identity is unknown"):
+                launch(fake)
+            self.assertEqual(fake.posts(), [])
+
+    def test_unreadable_runs_blocks_all_writes(self):
+        fake = FakeCLI(True)
+        fake.info["A"]["capabilities"].append("sync")
+        def fail(machine):
+            if machine == "B":
+                raise fleet.FleetError("Run list unavailable")
+        fake.before_runs = fail
+        with self.assertRaisesRegex(fleet.FleetError, "unavailable"):
+            launch(fake)
+        self.assertEqual(fake.posts(), [])
+
+    def test_unreadable_postgrant_preserves_run_and_blocks_next(self):
+        fake = FakeCLI(True)
+        same_pc(fake, gui=True)
+        real_command = fake.command
+        def command(*args):
+            if args == ("api", "A", "GET", "/api/v1/computer-use") and fake.cu["A"]["enabled"]:
+                raise fleet.FleetError("Ownership unavailable")
+            return real_command(*args)
+        fake.command = command
+        first, second = launch(fake)["players"]
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(first["computerUseOwnershipCheck"]["status"], "unavailable")
+        self.assertEqual(first["error"], "Ownership unavailable")
+        self.assertEqual(second["status"], "not-dispatched")
+        self.assertEqual([c[3].rsplit("/", 1)[-1] for c in fake.posts()], ["work", "computer-use"])
+
+    def test_invalid_run_pagination_cursor_fails_closed(self):
+        for cursor in (True, "200", 0, -1):
+            fake = fleet.CLI()
+            with patch.object(fake, "get", return_value={"items": [], "nextOffset": cursor}):
+                with self.subTest(cursor=cursor), self.assertRaises(fleet.FleetError):
+                    fake.pages("A", "/runs")
+
+    def test_unknown_write_blocks_second_player_without_retry(self):
+        fake = FakeCLI(True)
+        same_pc(fake)
+        fake.fail_work.add("A")
+        first, second = launch(fake)["players"]
+        self.assertEqual(first["status"], "unknown")
+        self.assertEqual(second["status"], "not-dispatched")
+        self.assertEqual(len(fake.posts()), 1)
 
 
 if __name__ == "__main__":

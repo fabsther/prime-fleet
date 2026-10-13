@@ -50,7 +50,7 @@ class CLI:
             nxt = page.get("nextOffset")
             if nxt is None:
                 return items
-            if not isinstance(nxt, int) or nxt <= offset:
+            if type(nxt) is not int or nxt <= offset:
                 raise FleetError("Invalid pagination cursor.")
             offset = nxt
 
@@ -180,7 +180,8 @@ def work(cli, machine, project, doc, plan, step, instructions="", rid=None):
 
 def active(run):
     # Status is an open string in v1. Unknown statuses are active (fail closed).
-    return not run.get("endedAt") and run.get("status") not in {"completed", "failed", "stopped", "cancelled"}
+    return not run.get("endedAt") and str(run.get("status", "")).lower() not in {
+        "done", "completed", "finished", "failed", "stopped", "cancelled", "canceled", "error"}
 
 
 def session_runs(cli, machines, session_id):
