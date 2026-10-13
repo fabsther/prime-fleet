@@ -81,3 +81,12 @@ Current tests: 12 Rust runtime/SSE and 11 Edge UI; both pass. Strict token gramm
 ## Physical Android authentication retest
 
 Parent reports CONNECTED with the final strict-input APK. The apparent token corruption was a harness error: `adb keyevent 111` (ESC), intended to hide Gboard, inserted a trailing backtick. It was not caused by secure storage or Authorization construction. Strict token validation caught it clearly and is retained. Earlier pending-authentication notes are superseded; cold-start persistence and other device checks are not implied by this result.
+
+## Tablet portrait and FR/EN delivery
+
+- Tablet classification is shortest viewport side ≥600 CSS px. Portrait tablets show two equally bounded vertical zones; landscape tablets keep side-by-side zones; phones remain single in both orientations. Nine layout checks passed, including four portrait sizes, both phone orientations, rotations, independent scrolling and no page overflow.
+- French is the default. FR/EN selectors persist locally and update app-owned copy, status/help/errors, dates, numbers and plural counts. User/agent content and technical request values are unchanged. Locale switches retain forms, drafts, expanded plans and editor values.
+- Combined headless Edge suite: 23/23. Vitest: 21/21 (including five pure translation regressions). Android debug build passed.
+- New APK: `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,052,429 bytes · SHA-256 `703d8335950a0aa2f49eac16e1d90bad532c908d2c97ba13ee6fc49e91a08079`. This supersedes earlier APK hashes. Physical portrait/localization retest is pending parent confirmation.
+- Matching Windows build: `app/src-tauri/target/debug/prime-fleet.exe` · 18,449,920 bytes · SHA-256 `c18dd95534e7494311533b00a1a39b0d76d6b69b046f8903ea108cbc9af67357`.
+- Matching Windows build: `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,496,256 bytes · SHA-256 `f999218535e744facbc9c8c9937d30c053cd0e2017899e4dfa8ac6738bd0f561`.
