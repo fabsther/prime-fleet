@@ -29,56 +29,45 @@
 .fleet-app { padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 .fleet-sidebar-backdrop { display:none; }
 .fleet-app .ps-pane { container-type:inline-size; }
-@media (min-width:761px) and (max-width:1250px) {
- .fleet-app .ps-body { display:flex; }
- .fleet-tools { flex-basis:45%; min-width:0; }
+/* Free zones stay bounded so each pane owns its scroll area. */
+.fleet-zone { display:flex; flex-direction:column; flex:1; min-width:0; min-height:0; overflow:hidden; border-right:1px solid var(--line); }
+.fleet-zone.fleet-tools { flex:0 0 40%; }
+.fleet-zone > .ps-pane { flex:1; min-height:0; }
+.fleet-zonebar { display:flex; gap:8px; align-items:center; padding:0 12px; min-height:35px; flex-shrink:0; border-bottom:1px solid var(--line); background:var(--sidebar); }
+.fleet-sidebar-empty { padding:18px; }
+/* One Studio-height tab bar per free zone. */
+.fleet-zone .ps-tabbar { display:none; }
+@media (max-width:1250px), (max-height:599px) {
  .fleet-app .ps-sidebar { display:none; }
  .fleet-mobile-menu { display:inline-grid; }
  .fleet-app .ps-sidebar.is-open { display:flex; position:fixed; z-index:50; height:100dvh; left:0; top:0; transform:none; }
  .fleet-sidebar-backdrop.is-open { display:block; position:fixed; inset:0; z-index:49; background:var(--backdrop); }
+ .fleet-tools { min-width:0; }
 }
-@media (min-width:761px) and (max-width:1250px) and (orientation:portrait) {
+/* Tablet = shortest viewport side >=600 CSS px, not width or device identity. */
+@media (min-width:600px) and (min-height:600px) and (orientation:portrait) {
  .fleet-app .ps-body { flex-direction:column; }
- .fleet-tools { flex:1 1 50%; min-height:0; border-top:1px solid var(--line); }
- .fleet-conversation { flex:1 1 50%; min-height:0; }
+ .fleet-zone, .fleet-zone.fleet-tools { flex:1 1 0; border-right:0; }
+ .fleet-zone.fleet-tools { min-width:0; border-top:1px solid var(--line); }
+}
+@media (max-width:599px), (max-height:599px) {
+ .fleet-zone.fleet-tools { display:none; }
 }
 @media (max-width:760px) {
- .fleet-mobile-menu { display:inline-grid; }
- .fleet-app .ps-sidebar.is-open { transform:none; }
- .fleet-sidebar-backdrop.is-open { display:block; position:fixed; inset:0; z-index:49; background:var(--backdrop); }
- .fleet-app .ps-body { display:flex; }
- .fleet-tools { display:none; }
  .fleet-machine-page { padding:16px; }
  .fleet-machines { display:flex; flex-direction:column; }
  .fleet-machine { border-radius:var(--r-card); padding:13px; }
  .fleet-machine .ps-machine-icon { display:inline-flex; }
  .fleet-machine .ps-card-title { font-size:15.5px; }
- .fleet-app .ps-header { gap:8px; }
+ .fleet-app .ps-header { gap:8px; flex-wrap:wrap; height:auto; flex-shrink:0; }
+ .fleet-app .ps-breadcrumb { flex:1 0 100%; }
+ .fleet-app .fleet-mobile-menu { flex-shrink:0; }
  .fleet-app .ps-header-actions { width:100%; justify-content:flex-end; }
 }
 @media (pointer:coarse) {
  .fleet-app .ps-tab,.fleet-app .ps-icon-btn,.fleet-app .ps-subrow,.fleet-app .ps-row,.fleet-app .ps-text-btn { min-height:44px; }
 }
 @container (max-width:400px) { .fleet-composer .ps-composer-toolbar { flex-wrap:wrap; } .fleet-composer .ps-send-btn { margin-left:auto; } }
-
-.fleet-zone { display:flex; flex-direction:column; flex:1; min-width:0; min-height:0; border-right:1px solid var(--line); }
-.fleet-zone.fleet-tools { flex:0 0 40%; }
-.fleet-zone > .ps-pane { flex:1; min-height:0; }
-.fleet-zonebar { display:flex; gap:8px; align-items:center; padding:0 12px; min-height:35px; border-bottom:1px solid var(--line); background:var(--sidebar); }
-.fleet-sidebar-empty { padding:18px; }
-@media(max-width:760px){ .fleet-zone.fleet-tools{display:none;} }
-@media(min-width:761px) and (max-width:1250px) and (orientation:portrait){ .fleet-zone.fleet-tools{flex:1 1 50%;} }
-
-/* One Studio-height tab bar per free zone. */
-.fleet-zone .ps-tabbar { display:none; }
-@media (max-width:760px) {
- .fleet-app .ps-header { flex-wrap:wrap; height:auto; flex-shrink:0; }
- .fleet-app .ps-breadcrumb { flex:1 0 100%; }
- .fleet-app .fleet-mobile-menu { flex-shrink:0; }
-}
-@media (min-width:761px) and (max-width:1250px) and (orientation:portrait) {
- .fleet-app .fleet-zone, .fleet-app .fleet-zone.fleet-tools { flex:1 1 50%; }
-}
 
 /* Match theme-selector specificity so the kit width steps apply. */
 @media(max-width:1250px){ :root[data-theme]{ --sidebar-width:245px; } }
