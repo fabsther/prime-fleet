@@ -67,3 +67,13 @@ Current artifact hashes (supersede earlier baseline):
 - `app/src-tauri/target/debug/prime-fleet.exe` · 18,441,216 bytes · `643e8c6f0e9b259ca903956ea8d580508c8dac6c672660cae466e2fff712a1d4`
 - `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,488,064 bytes · `b71b82f5a2d851513b9fc20cea9553bd46580f56dc402676d6e09ca2eeaf1ba8`
 - `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,039,685 bytes · `95c34b0513aa1bfa4e1814c26044e1ffcadf16acd475f8cf987a7cf4f8973a0f`
+
+## Strict token and new-scope update
+
+Current tests: 12 Rust runtime/SSE and 11 Edge UI; both pass. Strict token grammar and input/composition regressions reject trailing backticks/whitespace before storage. New ALIEN18 and BAGUETTE tokens were registered by stdin without printing token text. Explicit-sync same-session transfer and both CU authorize/revoke checks now pass; see final table. Latest APK: `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,040,141 bytes · SHA-256 `34a26c5b9bcbc75be21f3599aeeb77ea7fdfb5a0dfad39cd2f75f199739b4329`. Physical IME input path remains a device-retest item.
+
+## Final strict-input delivery
+
+- `app/src-tauri/target/debug/prime-fleet.exe` · 18,441,728 bytes · SHA-256 `c74a1c315507b622107a9634263de57cd479b604107cafb492d40c951ef5a251`
+- `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,488,064 bytes · SHA-256 `9eb08b924e8244212c1715ed275daf4f7e38f06adfd016ddf37777123620b5d2`
+- `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,040,141 bytes · SHA-256 `34a26c5b9bcbc75be21f3599aeeb77ea7fdfb5a0dfad39cd2f75f199739b4329`

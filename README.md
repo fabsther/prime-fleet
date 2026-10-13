@@ -136,3 +136,5 @@ MIT. The unmodified Studio CSS, icons and theme assets are included with their [
 If a device gets HTTP 401, re-save its token, then expand **Machines → Auth diagnostics** in this debug build. Compare vault byte count and SHA-256 fingerprint with the same machine in the PC app. Read-back should be stable and the request header token should match the vault. The diagnostics never expose token text; they are absent from release builds. A header match proves local construction, not server reception. Invalid/unreadable storage fails closed; Forget/re-add can recover a machine whose old token cannot be read.
 
 Live acceptance results and remaining scope/device checks are in [docs/LIVE-ACCEPTANCE.md](docs/LIVE-ACCEPTANCE.md).
+
+Studio token input must match `pa_[A-Za-z0-9_-]+` exactly. Backticks, spaces and other added characters are rejected before secure storage; the input is not silently sanitized.
