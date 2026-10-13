@@ -90,3 +90,14 @@ Parent reports CONNECTED with the final strict-input APK. The apparent token cor
 - New APK: `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,052,429 bytes · SHA-256 `703d8335950a0aa2f49eac16e1d90bad532c908d2c97ba13ee6fc49e91a08079`. This supersedes earlier APK hashes. Physical portrait/localization retest is pending parent confirmation.
 - Matching Windows build: `app/src-tauri/target/debug/prime-fleet.exe` · 18,449,920 bytes · SHA-256 `c18dd95534e7494311533b00a1a39b0d76d6b69b046f8903ea108cbc9af67357`.
 - Matching Windows build: `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,496,256 bytes · SHA-256 `f999218535e744facbc9c8c9937d30c053cd0e2017899e4dfa8ac6738bd0f561`.
+
+## Default conversations and campaign conflict hardening
+
+- Project opening selects active work first, otherwise most recent conversation. Pending default loads do not expose a writable new composer; explicit New conversation and manual choices survive refresh and late project responses.
+- Sidebar and breadcrumb use known step or role · campaign ID labels from accepted manifests, exact Run.requestId matches and persisted Roadmap step/session links. Ambiguous multi-step plan-only links use plan title; otherwise Studio title is unchanged. Active runs pulse (with reduced-motion support).
+- App/skill launchers read all target project runs before any write, reread immediately before and after work acceptance, and verify exact current Computer Use ownership after a grant. Conflicts preserve accepted IDs, withhold unsafe grants and block remaining dispatch. App active-player checks repeat read-only every 30 seconds and report later conflicts. Unknown flags/identities fail closed. Existing active/ambiguous/unreleased campaigns are not overwritten. No automatic unrelated stop, takeover or write retry.
+- API v1 provides no distributed lock. These are snapshots, not prevention of every later manual resume. Agents are explicitly told to report and stop if another session owns Computer Use or a game already runs on their own machine.
+- Final offline checks: 35 Playwright UI, 66 Vitest, 35 skill-safety, 12 Rust tests, all passed. Android/Windows debug builds passed. Physical confirmation of the three new UX behaviors is pending parent retest.
+- Current `app/src-tauri/target/debug/prime-fleet.exe` · 18,454,016 bytes · SHA-256 `3c0d29b4245e3a2d922aca6fbf8406067bf2e23fabd986120a3a0903ff57575d`.
+- Current `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,500,352 bytes · SHA-256 `60c64fe5f338216872a3a88984d7c185efc35213c66d7321772cd96335bf2509`.
+- Current `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,056,525 bytes · SHA-256 `4392158d7116ebf630cc505bce86a14878fa4c0083d4ff75c8427fb8efc020bd`.
