@@ -1,0 +1,27 @@
+/* Roadmap additions use Studio tokens; component recipes remain in studio.css. */
+.fleet-roadmap { min-width: 0; overflow: auto; container-type: inline-size; }
+.fleet-roadmap-head, .fleet-roadmap-actions { display: flex; align-items: center; gap: 8px; }
+.fleet-roadmap-head { justify-content: space-between; }
+.fleet-roadmap .ps-pane-section { padding: 18px; }
+.fleet-roadmap .ps-progress { width: 100%; margin-top: 12px; }
+.fleet-roadmap-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.fleet-plan-summary { font-size: var(--fs-body); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; }
+.fleet-roadmap-actions { flex-wrap: wrap; margin-top: 12px; }
+.fleet-step-item { list-style: none; margin: 8px 0; }
+.fleet-step-item > .ps-step { display: flex; align-items: start; gap: 8px; }
+.fleet-step-item .ps-step-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.fleet-step-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 4px 0 0 24px; }
+.fleet-step-note { margin: 4px 0 0 24px; font-size: 11px; color: var(--muted); }
+.fleet-step-note summary { cursor: pointer; }
+.fleet-step-note p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.fleet-step-item > .ps-steps { margin-left: 22px; }
+.fleet-campaign-player { padding: 13px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.fleet-campaign-player strong { font-weight: 550; overflow-wrap: anywhere; }
+.fleet-report-path { font-size: 10px; color: var(--muted); overflow-wrap: anywhere; }
+.fleet-player-error { color: var(--red); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.fleet-stop { color: var(--red); }
+.fleet-roadmap-dialog .ps-label { margin-top: 16px; }
+.fleet-roadmap-dialog textarea { resize: vertical; }
+.fleet-roadmap-dialog .ps-dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 24px; }
+@container (max-width: 400px) { .fleet-step-meta { gap: 6px; } .fleet-roadmap-actions .ps-btn { flex: 1; } }
+@media (pointer: coarse) { .fleet-roadmap .ps-text-btn, .fleet-roadmap .ps-icon-btn, .fleet-roadmap .ps-select { min-height: 44px; } }

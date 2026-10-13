@@ -5,3 +5,5 @@ app/src-tauri/gen/
 *.log
 .env*
 fleet-machines.json
+
+.local/

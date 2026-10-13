@@ -1,0 +1,5 @@
+# Tauri's CLI sets Android/iOS targets and linkers from the installed SDKs.
+# Do not hard-code a developer's SDK or NDK path here.
+[build]
+# Keep Windows linker memory bounded; mobile targets share the same source.
+jobs = 4

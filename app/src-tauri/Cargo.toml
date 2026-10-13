@@ -1,0 +1,31 @@
+[package]
+name = "prime-fleet"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+default-run = "prime-fleet"
+
+[lib]
+name = "prime_fleet_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "fs", "io-util", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+dirs = "6"
+tauri-plugin-fleet-secrets = { path = "secret-store" }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+rpassword = "7"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
