@@ -109,3 +109,40 @@ test('only pending questions can be answered and confirm sends a boolean',async(
  expect(await page.evaluate(()=>(window as any).__calls.filter((c:any)=>c.cmd==='api'&&c.method==='POST').at(-1).body)).toEqual({id:'q0',response:{confirmed:true}});
  await expect(page.locator('.ps-question')).toHaveCount(0);
 });
+
+test('tablet connection token avoids password/form semantics and keeps required validation',async({page})=>{
+ await page.setViewportSize({width:800,height:1100});await page.goto('/');
+ await expect(page.getByRole('heading',{name:'ALIEN18'})).toBeVisible();
+ await page.evaluate(()=>{
+  const w=window as any,base=w.__TAURI_INTERNALS__.invoke;w.__connectionSaves=0;
+  w.__TAURI_INTERNALS__.invoke=async(cmd:string,args:any)=>{
+   if(cmd==='save_machine'){w.__connectionSaves++;return [];}
+   return base(cmd,args);
+  };
+ });
+ const dialog=page.getByRole('dialog'),save=dialog.getByRole('button',{name:'Save connection'});
+ const name=dialog.getByLabel('Name',{exact:true}),url=dialog.getByLabel('Tailscale address'),token=dialog.getByLabel(/^Token/);
+ const saves=()=>page.evaluate(()=>(window as any).__connectionSaves);
+ await page.getByRole('button',{name:'Add a machine'}).click();
+ for(const editing of [false,true]){
+  if(editing)await page.getByRole('button',{name:'Edit connection'}).first().click();
+  await expect(dialog.locator('form')).toHaveCount(0);
+  await expect(token).toHaveAttribute('type','text');
+  await expect(token).toHaveAttribute('autocomplete','one-time-code');
+  await expect(token).toHaveAttribute('autocapitalize','none');
+  await expect(token).toHaveAttribute('autocorrect','off');
+  await expect(token).toHaveAttribute('spellcheck','false');
+  await expect(token).toHaveCSS('-webkit-text-security','disc');
+  expect(await token.evaluate((input:HTMLInputElement)=>input.form)).toBeNull();
+  await expect(save).toHaveAttribute('type','button');
+  await expect(name).toHaveAttribute('required','');await expect(url).toHaveAttribute('required','');
+  expect(await token.evaluate((input:HTMLInputElement)=>input.required)).toBe(!editing);
+  if(!editing){
+   await save.click();await expect(name).toBeFocused();expect(await saves()).toBe(0);
+   await name.fill('Tablet test');await save.click();await expect(url).toBeFocused();expect(await saves()).toBe(0);
+   await url.fill('https://tablet.example.ts.net');await save.click();await expect(token).toBeFocused();expect(await saves()).toBe(0);
+   await token.fill('test-placeholder');await token.press('Enter');expect(await saves()).toBe(0);
+  }
+  await save.click();await expect(dialog).not.toBeVisible();expect(await saves()).toBe(editing?2:1);
+ }
+});

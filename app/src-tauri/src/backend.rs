@@ -234,14 +234,15 @@ impl Backend {
             .timeout(Duration::from_secs(60))
             .send()
             .await
-            .map_err(|_| {
-                ApiError::new(
-                    "network",
-                    "Request failed; outcome may be unknown. No automatic retry.",
-                )
-            })?;
+            .map_err(|_| request_network_error(method))?;
         let status = response.status();
-        let bytes = limited_body(response).await?;
+        let bytes = limited_body(response).await.map_err(|error| {
+            if error.code == "network" && method.eq_ignore_ascii_case("GET") {
+                request_network_error(method)
+            } else {
+                error
+            }
+        })?;
         if !status.is_success() {
             return Err(http_error(
                 status.as_u16(),
@@ -521,6 +522,16 @@ async fn limited_body(mut response: Response) -> Result<Vec<u8>> {
     }
     Ok(data)
 }
+fn request_network_error(method: &str) -> ApiError {
+    ApiError::new(
+        "network",
+        if method.eq_ignore_ascii_case("GET") {
+            "Machine injoignable (vérifiez Tailscale)"
+        } else {
+            "Request failed; outcome may be unknown. No automatic retry."
+        },
+    )
+}
 fn http_error(status: u16, value: &Value) -> ApiError {
     ApiError {
         status: Some(status),
@@ -630,6 +641,21 @@ mod tests {
         );
     }
     #[test]
+    fn get_network_errors_are_unreachable_but_writes_remain_uncertain() {
+        for method in ["GET", "get"] {
+            let error = request_network_error(method);
+            assert_eq!(error.code, "network");
+            assert_eq!(error.status, None);
+            assert_eq!(error.message, "Machine injoignable (vérifiez Tailscale)");
+        }
+        for method in ["POST", "post", "PUT", "PATCH", "DELETE"] {
+            assert_eq!(
+                request_network_error(method).message,
+                "Request failed; outcome may be unknown. No automatic retry."
+            );
+        }
+    }
+    #[test]
     fn metadata_has_no_token_and_error_preserves_revision() {
         assert!(serde_json::from_value::<Machine>(
             json!({"id":"a", "name":"A", "url":"https://a", "token":"secret"})
@@ -640,6 +666,8 @@ mod tests {
             &json!({"code":"revision_conflict", "error":"Read again", "currentRevision":7}),
         );
         assert_eq!(error.status, Some(409));
+        assert_eq!(error.code, "revision_conflict");
+        assert_eq!(error.message, "Read again");
         assert_eq!(error.current_revision, Some(7));
         let temp = tempfile::tempdir().unwrap();
         let backend = Backend::new(temp.path().to_owned(), temp.path().to_owned()).unwrap();

@@ -15,6 +15,7 @@
 .fleet-machine .ps-card-title { margin:0; }
 .fleet-machine .ps-machine-icon { display:none; }
 .fleet-machine .ps-kv { margin:16px 0; }
+.fleet-token-input { -webkit-text-security:disc; }
 .fleet-composer textarea { flex:1; min-width:0; resize:vertical; max-height:220px; }
 .fleet-composer .ps-composer-toolbar { gap:8px; }
 .fleet-message-body { overflow-wrap:anywhere; }
