@@ -196,7 +196,7 @@ impl Backend {
         }
         let existing = machines.iter().find(|m| m.id == machine.id);
         let token = token
-            .map(|t| normalize_token(&t).map(str::to_owned))
+            .map(|t| validate_token(&t).map(str::to_owned))
             .transpose()?
             .filter(|t| !t.is_empty());
         if (existing.is_none() || existing.is_some_and(|m| m.url != machine.url)) && token.is_none()
@@ -276,7 +276,7 @@ impl Backend {
         let _lock = self.lock_config()?;
         let machine = self.machine(id)?;
         let token = get_token(Some(app), &machine.id)?;
-        let token_format_valid = normalize_token(&token).is_ok_and(|t| !t.is_empty());
+        let token_format_valid = validate_token(&token).is_ok_and(|t| !t.is_empty());
         let token_sha256 = fingerprint(token.as_bytes());
         let read_back_stable =
             get_token(Some(app), &machine.id).is_ok_and(|t| t.as_bytes() == token.as_bytes());
@@ -498,18 +498,26 @@ impl Backend {
 
 // Android keyboards and clipboard/CLI input can add edge whitespace. Never accept
 // whitespace inside a bearer token, non-ASCII, or control bytes in an HTTP header.
-fn normalize_token(token: &str) -> Result<&str> {
-    let token = token.trim();
-    if token.len() > 8192 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+fn validate_token(token: &str) -> Result<&str> {
+    // Empty means keep an existing credential. Never silently alter a supplied Studio token.
+    if !token.is_empty()
+        && (token.len() > 8192
+            || !token.strip_prefix("pa_").is_some_and(|body| {
+                !body.is_empty()
+                    && body
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            }))
+    {
         return Err(ApiError::new(
             "validation",
-            "Token must be ASCII without internal whitespace",
+            "Token invalide : format pa_[A-Za-z0-9_-]+ requis, sans espace ni caractère ajouté.",
         ));
     }
     Ok(token)
 }
 fn authorization_header(token: &str) -> Result<HeaderValue> {
-    let token = normalize_token(token)?;
+    let token = validate_token(token)?;
     if token.is_empty() {
         return Err(ApiError::new("validation", "Token is required"));
     }
@@ -745,38 +753,41 @@ pub fn emit_event(
 mod tests {
     use super::*;
     #[test]
-    fn tokens_are_trimmed_at_the_boundary_and_headers_are_exact_and_sensitive() {
-        for input in [
-            "  synthetic-token_123+/= ",
-            "\r\nsynthetic-token_123+/=\t",
-            "\u{a0}synthetic-token_123+/=\u{a0}",
-        ] {
-            let normalized = normalize_token(input).unwrap();
-            assert_eq!(normalized, "synthetic-token_123+/=");
+    fn studio_tokens_are_exact_and_headers_are_sensitive() {
+        for input in ["pa_synthetic-token_123", "pa_a"] {
+            assert_eq!(validate_token(input).unwrap(), input);
             let request = Client::new()
                 .get("https://host/api/v1/machine")
                 .header(AUTHORIZATION, authorization_header(input).unwrap())
                 .build()
                 .unwrap();
             let header = &request.headers()[AUTHORIZATION];
-            assert_eq!(header.as_bytes(), b"Bearer synthetic-token_123+/=");
+            assert_eq!(header.as_bytes(), format!("Bearer {input}").as_bytes());
             assert!(header.is_sensitive());
             assert!(!request.headers().contains_key("Origin"));
         }
         for invalid in [
-            "token with space",
-            "token\ttab",
-            "token\nline",
-            "nonascii-\u{e9}",
-            "zero\u{200b}width",
-            "bad\0byte",
+            "pa_good`",
+            "pa_good ",
+            " pa_good",
+            "pa_good\n",
+            "pa_good\t",
+            "pa_",
+            "other_prefix",
+            "pa_nonascii-\u{e9}",
+            "pa_zero\u{200b}width",
+            "pa_bad\0byte",
+            "pa_good+",
         ] {
-            assert!(normalize_token(invalid).is_err());
+            assert!(
+                validate_token(invalid).is_err(),
+                "invalid synthetic fixture accepted"
+            );
             assert!(authorization_header(invalid).is_err());
         }
-        assert!(normalize_token(&"x".repeat(8193)).is_err());
-        assert!(authorization_header(" ").is_err());
-        assert_eq!(normalize_token(" ").unwrap(), "");
+        assert!(validate_token(&format!("pa_{}", "x".repeat(8190))).is_err());
+        assert_eq!(validate_token("").unwrap(), "");
+        assert!(authorization_header("").is_err());
     }
     #[test]
     fn token_save_rejects_truncation_and_restores_previous_secret() {
@@ -841,15 +852,42 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let backend = Backend::new(temp.path().to_owned(), temp.path().to_owned()).unwrap();
         let header = backend
-            .authorization("synthetic-id", "synthetic-token")
+            .authorization("synthetic-id", "pa_synthetic-token")
             .unwrap();
         let observations = backend.auth_observations.lock().unwrap();
         let observed = observations["synthetic-id"].header.as_ref().unwrap();
         assert_eq!(observed.sha256, fingerprint(header.as_bytes()));
-        assert_eq!(observed.token_sha256, fingerprint(b"synthetic-token"));
+        assert_eq!(observed.token_sha256, fingerprint(b"pa_synthetic-token"));
         let serialized = serde_json::to_string(observed).unwrap();
-        assert!(!serialized.contains("synthetic-token"));
-        assert_eq!(observed.bytes, b"Bearer synthetic-token".len());
+        assert!(!serialized.contains("pa_synthetic-token"));
+        assert_eq!(observed.bytes, b"Bearer pa_synthetic-token".len());
+    }
+
+    #[test]
+    fn invalid_studio_token_cannot_reach_secure_storage_or_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let backend = Backend::new(temp.path().to_owned(), temp.path().to_owned()).unwrap();
+        for token in [
+            "pa_synthetic`",
+            "pa_synthetic ",
+            " pa_synthetic",
+            "wrong-prefix",
+        ] {
+            let error = backend
+                .save_machine(
+                    None,
+                    Machine {
+                        id: "synthetic-id".into(),
+                        name: "Synthetic".into(),
+                        url: "https://host".into(),
+                    },
+                    Some(token.into()),
+                )
+                .unwrap_err();
+            assert_eq!(error.code, "validation");
+            assert!(backend.machines().unwrap().is_empty());
+            assert!(!temp.path().join("machines.json").exists());
+        }
     }
 
     #[test]

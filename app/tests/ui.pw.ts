@@ -128,8 +128,8 @@ test('tablet connection token avoids password/form semantics and keeps required 
   if(editing)await page.getByRole('button',{name:'Edit connection'}).first().click();
   await expect(dialog.locator('form')).toHaveCount(0);
   await expect(token).toHaveAttribute('type','text');
-  await expect(token).toHaveAttribute('autocomplete','one-time-code');
-  await expect(token).toHaveAttribute('autocapitalize','none');
+  await expect(token).toHaveAttribute('autocomplete','off');
+  await expect(token).toHaveAttribute('autocapitalize','off');
   await expect(token).toHaveAttribute('autocorrect','off');
   await expect(token).toHaveAttribute('spellcheck','false');
   await expect(token).toHaveCSS('-webkit-text-security','disc');
@@ -141,7 +141,7 @@ test('tablet connection token avoids password/form semantics and keeps required 
    await save.click();await expect(name).toBeFocused();expect(await saves()).toBe(0);
    await name.fill('Tablet test');await save.click();await expect(url).toBeFocused();expect(await saves()).toBe(0);
    await url.fill('https://tablet.example.ts.net');await save.click();await expect(token).toBeFocused();expect(await saves()).toBe(0);
-   await token.fill('test-placeholder');await token.press('Enter');expect(await saves()).toBe(0);
+   await token.fill('pa_synthetic_test');await token.press('Enter');expect(await saves()).toBe(0);
   }
   await save.click();await expect(dialog).not.toBeVisible();expect(await saves()).toBe(editing?2:1);
  }
@@ -167,4 +167,23 @@ test('new Roadmap requires an explicit revisioned initialization before plan cre
  await expect(page.getByRole('button',{name:'Add a plan',exact:true})).toBeEnabled();
  await expect(page.getByRole('button',{name:'Initialize Roadmap',exact:true})).toHaveCount(0);
  expect(await page.evaluate(()=>(window as any).__initCalls)).toEqual([{action:'init',expectedRevision:0}]);
+});
+
+
+test('token input rejects the Android trailing backtick and saves only completed valid input',async({page})=>{
+ await page.goto('/');await expect(page.getByRole('heading',{name:'ALIEN18'})).toBeVisible();
+ await page.evaluate(()=>{const w=window as any,base=w.__TAURI_INTERNALS__.invoke;w.__savedTokens=[];w.__TAURI_INTERNALS__.invoke=async(cmd:string,args:any)=>{if(cmd==='save_machine'){w.__savedTokens.push(args.token);return [];}return base(cmd,args);};});
+ await page.getByRole('button',{name:'Add a machine'}).click();
+ const dialog=page.getByRole('dialog'),token=dialog.getByLabel(/^Token/),save=dialog.getByRole('button',{name:'Save connection'});
+ await dialog.getByLabel('Name',{exact:true}).fill('Tablet regression');await dialog.getByLabel('Tailscale address').fill('https://tablet.example.ts.net');
+ for(const invalid of ['pa_synthetic`','pa_synthetic ','wrong-prefix']){
+  await token.fill(invalid);await save.click();await expect(page.getByText('Token invalide : format pa_[A-Za-z0-9_-]+ requis, sans espace ni caractère ajouté.')).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).__savedTokens)).toEqual([]);await expect(dialog).toBeVisible();
+ }
+ await token.fill('');
+ await token.evaluate((input:HTMLInputElement)=>{input.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));input.value='pa_synthetic_valid';input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',data:'pa_synthetic_valid',isComposing:true}));});
+ await expect(save).toBeDisabled();expect(await page.evaluate(()=>(window as any).__savedTokens)).toEqual([]);
+ await token.evaluate((input:HTMLInputElement)=>{input.value='pa_synthetic_valid';input.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'pa_synthetic_valid'}));});
+ await expect(save).toBeEnabled();await save.click();await expect(dialog).not.toBeVisible();
+ expect(await page.evaluate(()=>(window as any).__savedTokens)).toEqual(['pa_synthetic_valid']);
 });
