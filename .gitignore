@@ -7,3 +7,6 @@ app/src-tauri/gen/
 fleet-machines.json
 
 .local/
+app/src-tauri/secret-store/android/build/
+app/src-tauri/secret-store/android/.tauri/
+app/src-tauri/secret-store/android/.gradle/

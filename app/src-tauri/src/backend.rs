@@ -12,6 +12,7 @@ use std::{
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 
+#[cfg(desktop)]
 pub const IDENTIFIER: &str = "dev.primefleet.app";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

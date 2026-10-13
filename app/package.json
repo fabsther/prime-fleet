@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "tauri": "tauri",
-    "test:ui": "playwright test"
+    "test:ui": "playwright test",
+    "android:prepare": "node scripts/android-prepare.mjs",
+    "android:build": "node scripts/android-build.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
