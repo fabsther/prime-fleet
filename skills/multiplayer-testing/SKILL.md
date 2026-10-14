@@ -31,6 +31,14 @@ Limits: 1..8 unchecked players, at most two per PC, at most one `@gui` player pe
 7. **Computer Use:** GUI players wait at most two minutes for authorization only if there is no other owner, then report and stop. An actual other owner means an immediate conflict: report and STOP without input or takeover. Players never enable it themselves. Set backend/model locally in Studio; Fleet does not change them.
 8. **Existing activity:** every player must report and STOP if another agent session owns Computer Use **or a game instance already runs ON THIS MACHINE**. A guest joining a remote host is not a local game conflict. Never take control, stop the other session, or close its game. The launcher injects this instruction for all players, including non-GUI players; the actual player checks game processes, not a guessed Fleet game-process API.
 
+## Game input: virtual gamepad
+
+Computer Use moves the OS cursor and cannot hold keys; many games capture the mouse. When the game supports a controller, players drive it with a virtual Xbox 360 pad and use Computer Use only to look at the screen and focus the game window.
+
+- Setup once per PC: `python skills/multiplayer-testing/scripts/gamepad.py setup` (venv in `%LOCALAPPDATA%/prime-fleet/gamepad`, package `vgamepad`; the ViGEmBus driver needs one UAC approval by a human).
+- Use: `python skills/multiplayer-testing/scripts/gamepad.py run "move 0 1 1.5; look 0.5 0 0.4; press A; hold RT 1.2; hold LT 1; wait 2"`.
+- Put the game's controller mapping in the campaign common instructions (e.g. Pieton: left stick move, right stick camera, A interact, RT throw, LT kick, RB jump, LB sprint).
+
 ## Launch
 
 ```text
