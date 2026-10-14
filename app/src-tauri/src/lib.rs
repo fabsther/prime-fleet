@@ -71,7 +71,8 @@ fn stream(
         let backend = task_app.state::<Backend>();
         let result = backend
             .stream(&task_app, &machine_id, &path, after.unwrap_or(0), |event| {
-                backend::emit_event(&task_app, &id, &machine_id, &path, event)
+                task_app.emit("fleet-stream", json!({"streamId": id, "machineId": machine_id, "path": path, "event": event.data, "id": event.id}))
+                    .map_err(|_| ApiError::new("stream", "Cannot deliver stream event"))
             })
             .await;
         if let Ok(mut streams) = backend.streams.lock() {

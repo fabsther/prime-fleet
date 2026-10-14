@@ -40,8 +40,8 @@ Paths are relative to this checkout and ignored by Git:
 
 ## Not yet validated
 
-- Dedicated live write acceptance testing, including real SSE questions, stop/transfer, Roadmap conflicts, Computer Use authorization/revocation, and skill launches from Studio settings.
-- The final Pieton host/guest campaign and its two player reports.
+- Historical baseline: dedicated live write acceptance was pending. The later sandbox results below and LIVE-ACCEPTANCE.md supersede the checks explicitly marked passed; other cases remain unclaimed.
+- Historical baseline: Pieton had not yet run. The real host/guest campaign below supersedes this item; archived player reports are not independently rechecked here.
 - Physical Xiaomi tablet installation, Tailscale routing, Android Keystore persistence, mobile downloads, and external display behavior.
 - iOS generation/build/device operation. Mobile entry point, Keychain backend and iOS minimum version are configured; a Mac/Xcode is required.
 - English is the current UI language; there is no full French translation table.
@@ -103,3 +103,44 @@ Parent reports CONNECTED with the final strict-input APK. The apparent token cor
 - Current `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,056,525 bytes · SHA-256 `4392158d7116ebf630cc505bce86a14878fa4c0083d4ff75c8427fb8efc020bd`.
 
 CLI follow-up `status` now recomputes paginated same-project active-run conflicts and fresh global ownership, caches shared reads, retains original accepted identity and request IDs, allows only null→assigned session promotion, and never mutates the manifest or sends POST. Canonical machine/project/run ownership is required. Final skill-safety suite: 45/45, including 10 status regressions. APK/Windows hashes above remain current; these last changes are Python-only.
+
+## Real Pieton campaign · 14 October 2026
+
+Parent-reported live evidence: campaign `cf98d7d61bdc`, 18:00–18:26 UTC. Host ALIEN18 used Studio `4.3.8-beta.1`; guest BAGUETTE used `4.3.7`. Players used the virtual Xbox gamepad from `skills/multiplayer-testing/scripts/gamepad.py` with ViGEmBus. Computer Use supplied eyes and window focus. This was a real game session, not the offline mock suite.
+
+All reported network checks passed:
+
+- Guest joined on the first try, in about 80 seconds.
+- Spawn fix was verified; pick, throw and kick worked across host and guest.
+- Logout recovered `shoes=1`.
+- S16 refusal was verified.
+- Rejoin created no duplicate player.
+- Stock stayed constant and saves were unchanged.
+
+Game bugs are tracked in the Pieton repository, not as Fleet failures. This campaign closes the previously pending real host/guest network acceptance; it does not imply every device, unrelated campaign, or API race is verified.
+
+## Final Ponytail review · 14 October 2026
+
+Reviewed all tracked app source, Rust/Keystore plugin, skills, build scripts, configuration, tests and docs. Unchanged licensed Studio assets and generated outputs were not rewritten. Applied findings below use pre-cut line numbers:
+
+- `app/src-tauri/src/backend.rs:L741: yagni: one-caller emit_event wrapper. Inline the same native event payload and error mapping at its caller.`
+- `app/src-tauri/src/sse.rs:L20: delete: first_line state duplicates the existing started branch. Handle the initial BOM in that branch.`
+- `app/src/Roadmap.tsx:L44: yagni: remapping resolved fleet machines back to the same ID/name. Use the resolved machine directly.`
+- `skills/_fleet.py:L187: shrink: session_runs accumulator loop. Ordered filtered list comprehension.`
+- `app/src-tauri/secret-store/src/lib.rs:L60: shrink: Android set/remove unit-result boilerplate. Result::map(|_| ()).`
+- `app/src/Roadmap.tsx:L47: delete: unused read overrides and ignored refresh return. Close over current IDs and return nothing from refresh.`
+- `skills/multiplayer-testing/scripts/campaign.py:L129: delete: status exclusion after its early return. Keep the dry-run guard alone.`
+
+Net: **24 implementation lines removed, 0 dependencies changed**. No feature or test was removed. Kept token validation, native no-Origin transport, exact Computer Use ownership guards, no automatic write retries, native secure-storage bridge, SSE bounds and manifest preservation. Further compression of these guards and removal of licensed reference assets were declined; there was no safe larger cut worth making.
+
+Final physical line counts: **app src 1,615; Rust 1,532; skills 853**. App src includes owned TS/TSX/CSS, excluding `studio/` assets and `.test.ts`; Rust includes all tracked `.rs` (build scripts and embedded tests included); skills includes implementation `.py`, excluding `skills/tests`. Kotlin, standalone tests, docs, vendor/generated files and build outputs are separate.
+
+## Final follow-up verification and delivery · 14 October 2026
+
+Rechecked `6988f4b`, `ef1b54a` and documentation follow-up `679f755`, then reran after the safe cuts: **66/66 Vitest, 35/35 installed-Edge UI, 45/45 offline skill-safety, 12/12 Rust runtime/SSE and 1/1 Rust secret-store bridge**. Rust tests use the committed dependency lock. **Clippy all targets with `-D warnings` passed** for both the app and secret-store package. The forced Gradle rerun passed **1/1 Kotlin Invoke/GCM test**; desktop release `cargo check --locked --release` also passed. Both packaging commands also passed the TypeScript/Vite production build. Offline tests did not write to live Studio projects.
+
+Rebuilt Windows debug EXE/MSI with `npm run tauri -- build --debug --bundles msi`. Rebuilt the ARM64 debug APK with `npm run android:build`; its documented Windows symlink fallback copied and NDK-stripped the freshly built library before Gradle packaging. The APK contains only ARM64 native libraries. No system software was installed during this verification. Paths below are checkout-relative, ignored by Git, and supersede earlier hashes:
+
+- `app/src-tauri/target/debug/prime-fleet.exe` · 18,452,480 bytes · SHA-256 `08f6b23368b1a541cb27c4bc411282f8a735883a71f55836e46f80686f08e36a`
+- `app/src-tauri/target/debug/bundle/msi/Prime Fleet_0.1.0_x64_en-US.msi` · 6,500,352 bytes · SHA-256 `98302c26274f14d8b12b3a840e036e947d4ddcacc3b10ef12d388ec45ddb922f`
+- `app/src-tauri/gen/android/app/build/outputs/apk/arm64/debug/app-arm64-debug.apk` · 39,056,829 bytes · SHA-256 `cc6d65972c075b8cd9d82b75c21fd29eb53c6e8ccb7cfef4a568aea14ec91076`

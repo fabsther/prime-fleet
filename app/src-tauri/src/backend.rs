@@ -14,7 +14,7 @@ use std::{
     sync::Mutex,
     time::Duration,
 };
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::io::AsyncWriteExt;
 
 #[cfg(desktop)]
@@ -736,17 +736,6 @@ fn http_error(status: u16, value: &Value) -> ApiError {
             .into(),
         current_revision: value["currentRevision"].as_u64(),
     }
-}
-
-pub fn emit_event(
-    app: &AppHandle,
-    stream_id: &str,
-    machine_id: &str,
-    path: &str,
-    event: SseEvent,
-) -> Result<()> {
-    app.emit("fleet-stream", json!({"streamId": stream_id, "machineId": machine_id, "path": path, "event": event.data, "id": event.id}))
-        .map_err(|_| ApiError::new("stream", "Cannot deliver stream event"))
 }
 
 #[cfg(test)]

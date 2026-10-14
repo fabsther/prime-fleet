@@ -17,7 +17,6 @@ pub struct Parser {
     id: Option<u64>,
     event: Option<String>,
     after_cr: bool,
-    first_line: bool,
     started: bool,
 }
 
@@ -50,12 +49,8 @@ impl Parser {
         let bytes = std::mem::take(&mut self.line);
         let mut line = std::str::from_utf8(&bytes).map_err(|_| "Invalid SSE UTF-8")?;
         if !self.started {
-            self.first_line = true;
             self.started = true;
-        }
-        if self.first_line {
             line = line.trim_start_matches('\u{feff}');
-            self.first_line = false;
         }
         if line.is_empty() {
             if self.data.is_empty() {

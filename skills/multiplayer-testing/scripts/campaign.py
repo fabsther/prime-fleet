@@ -126,7 +126,7 @@ def status(cli, manifest):
 def control(cli, manifest, action, message=None):
     if action == "status":
         return status(cli, manifest)
-    if action != "status" and manifest.get("dryRun"):
+    if manifest.get("dryRun"):
         raise FleetError("This is a dry-run manifest. It contains no accepted campaign runs.")
     if action == "send" and (not message or len(message) > 262144):
         raise FleetError("Message must contain 1..262144 characters.")

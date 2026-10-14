@@ -41,18 +41,16 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
   const documentScope = useRef('');
   scope.current = `${machineId}/${projectId}`;
   const fleet: Machine[] = useMemo(() => machines.map(m => ({ ...m, url: m.url ?? '', status: m.online ? 'online' : 'offline', syncAllowed: m.syncAllowed ?? m.scopes?.includes('sync:write') })), [machines]);
-  const nativeMachine = (machine: Machine) => machines.find(m => m.id === machine.id)!;
   const fleetProject = { key: projectId, name: projectId, syncId: null, copies: projectCopies.map(copy => ({ ...copy, name: projectId, syncId: null })) };
   const report = (error: unknown) => { setMessage(errorText(error)); onError(error); };
-  async function read(machine = machineId, project = projectId): Promise<Document> {
-    const result = await api(machine, 'GET', `${path(project)}/roadmap`);
+  async function read(): Promise<Document> {
+    const result = await api(machineId, 'GET', `${path(projectId)}/roadmap`);
     return result.roadmap;
   }
   async function refresh() {
     const current = `${machineId}/${projectId}`;
     const fresh = await read();
     if (scope.current === current) { documentScope.current = current; setDocument(fresh); }
-    return fresh;
   }
   useEffect(() => {
     let current = true;
@@ -109,12 +107,11 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
     const markup = parseMarkup(step.note);
     const machine = resolveMachine(markup.machine, fleet);
     if (markup.assignments.length !== 1 || !machine) throw new Error('Assign exactly one known machine before launching.');
-    const target = nativeMachine(machine);
-    if (!window.confirm(t("Launch “{step}” on {name}? This starts an agent run.",{step:step.text,name:target.name}))) return;
+    if (!window.confirm(t("Launch “{step}” on {name}? This starts an agent run.",{step:step.text,name:machine.name}))) return;
     try {
       const accepted = await launchStep({ project: fleetProject, planId: plan.id, stepId: step.id, machine, expectedStep: step, expectedSummary: plan.summary });
-      onRun(target.id, { ...accepted.run, sessionId: accepted.sessionId ?? accepted.run.sessionId });
-      setMessage(accepted.linkWarning ? 'Work accepted, but the Roadmap link could not be saved.' : `Work accepted on ${target.name}.`);
+      onRun(machine.id, { ...accepted.run, sessionId: accepted.sessionId ?? accepted.run.sessionId });
+      setMessage(accepted.linkWarning ? 'Work accepted, but the Roadmap link could not be saved.' : `Work accepted on ${machine.name}.`);
       await refresh();
     } catch (error) { try { await refresh(); } catch { /* No write retry. */ } throw error; }
   }
@@ -127,12 +124,11 @@ export default function Roadmap({ machineId, projectId, machines, projectCopies,
     const id = newCampaignId();
     const validation = validateCampaign(plan, fleet, id);
     if (validation.errors.length) throw new Error(validation.errors.join('\n'));
-    for (const player of validation.players) if (!targetCopy(nativeMachine(player.machine))) throw new Error(`${player.machine.name} does not have this project.`);
+    for (const player of validation.players) if (!targetCopy(player.machine)) throw new Error(`${player.machine.name} does not have this project.`);
     if (!window.confirm(t("campaign launch",{count:validation.players.length,plan:plan.title ?? t("Campaign")},validation.players.length))) return;
-    const players: Player[] = validation.players.map(p => {
-      const machine = nativeMachine(p.machine);
-      return { key: p.step.id, player: p, machineId: machine.id, projectId: targetCopy(machine)!.id, requestId: campaignRequestId(id, p.step.id), status: 'Waiting' };
-    });
+    const players: Player[] = validation.players.map(p => ({
+      key: p.step.id, player: p, machineId: p.machine.id, projectId: targetCopy(p.machine)!.id, requestId: campaignRequestId(id, p.step.id), status: 'Waiting',
+    }));
     setCampaign({ id, planId: plan.id, machineId, projectId, players, launching: true });
     const notified = new Set<string>();
     const onUpdate = (row: CampaignPlayerResult) => {

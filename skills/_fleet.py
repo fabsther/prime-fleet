@@ -185,12 +185,9 @@ def active(run):
 
 
 def session_runs(cli, machines, session_id):
-    found = []
-    for machine in machines:
-        if machine["state"] == "online":
-            found.extend((machine, r) for r in cli.pages(machine["alias"], "/runs")
-                         if r.get("sessionId") == session_id and active(r))
-    return found
+    return [(machine, run) for machine in machines if machine["state"] == "online"
+            for run in cli.pages(machine["alias"], "/runs")
+            if run.get("sessionId") == session_id and active(run)]
 
 
 def last_message(cli, machine, project, session_id):

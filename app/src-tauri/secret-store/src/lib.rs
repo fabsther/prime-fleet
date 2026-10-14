@@ -57,8 +57,7 @@ pub fn get<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<String, String> {
 pub fn set<R: Runtime>(app: &AppHandle<R>, id: &str, token: &str) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        call(app, "set", id, Some(token))?;
-        Ok(())
+        call(app, "set", id, Some(token)).map(|_| ())
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -70,8 +69,7 @@ pub fn set<R: Runtime>(app: &AppHandle<R>, id: &str, token: &str) -> Result<(), 
 pub fn remove<R: Runtime>(app: &AppHandle<R>, id: &str) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        call(app, "remove", id, None)?;
-        Ok(())
+        call(app, "remove", id, None).map(|_| ())
     }
     #[cfg(not(target_os = "android"))]
     {

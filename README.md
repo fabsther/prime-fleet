@@ -67,7 +67,9 @@ For a machine with `sync`, also enable **Token allows sync:write** in its Fleet 
 
 In Prime Agent's **skills** setting, add the absolute path to this repository's `skills` folder on each PC. Put the installed desktop executable on `PATH`. A `git pull` updates the skills without changing Studio.
 
-Included: `fleet-machines`, `fleet-roadmap`, `fleet-conversation`, and `multiplayer-testing`. Scripts use Python's standard library and call only `prime-fleet machines/api`. Mutations are **dry-run by default**; real writes require `--confirmed`.
+Included: `fleet-machines`, `fleet-roadmap`, `fleet-conversation`, and `multiplayer-testing`. Fleet API scripts use Python's standard library and call only `prime-fleet machines/api`. Mutations are **dry-run by default**; real writes require `--confirmed`.
+
+For Windows games that need analog sticks, triggers, or controller buttons, use `skills/multiplayer-testing/scripts/gamepad.py` instead of mouse/keyboard input. Run `python skills/multiplayer-testing/scripts/gamepad.py setup` once per PC to install its isolated `vgamepad` environment and ViGEmBus (one-time UAC approval). Use Computer Use for eyes and game-window focus, then `gamepad.py run` for controller sequences. Setup is an explicit local driver install, not a Fleet API mutation; do not repeat it for each campaign.
 
 See [skills setup and examples](skills/README.md). Conversation transfer conservatively refuses if a configured fleet member cannot be inspected; remove unrelated offline machines if needed. There is no distributed conversation lock in API v1, so an external run can still race a final check.
 
