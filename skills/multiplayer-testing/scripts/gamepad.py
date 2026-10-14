@@ -10,11 +10,16 @@ VENV = os.path.join(os.environ.get("LOCALAPPDATA", ""), "prime-fleet", "gamepad"
 PY = os.path.join(VENV, "Scripts", "python.exe")
 
 def setup():
+    import shutil
     if not os.path.exists(PY):
-        subprocess.check_call(["uv", "venv", VENV, "--python", "3.12"]) if subprocess.call(["uv", "--version"], stdout=subprocess.DEVNULL) == 0 \
-            else subprocess.check_call([sys.executable, "-m", "venv", VENV])
-    subprocess.check_call([PY, "-m", "pip", "install", "-q", "vgamepad"]) if subprocess.call([PY, "-m", "pip", "--version"], stdout=subprocess.DEVNULL) == 0 \
-        else subprocess.check_call(["uv", "pip", "install", "--python", PY, "vgamepad"])
+        uv = shutil.which("uv")
+        subprocess.check_call([uv, "venv", VENV, "--python", "3.12"] if uv else [sys.executable, "-m", "venv", VENV])
+    if subprocess.call([PY, "-m", "pip", "--version"], stdout=subprocess.DEVNULL) == 0:
+        # vgamepad ships as an sdist: build it with the venv's own setuptools.
+        subprocess.check_call([PY, "-m", "pip", "install", "-q", "setuptools", "wheel"])
+        subprocess.check_call([PY, "-m", "pip", "install", "-q", "--no-build-isolation", "vgamepad"])
+    else:
+        subprocess.check_call([shutil.which("uv") or "uv", "pip", "install", "--python", PY, "vgamepad"])
     print(subprocess.run(["sc", "query", "ViGEmBus"], capture_output=True, text=True).stdout or "ViGEmBus missing: approve the UAC prompt of vgamepad's installer")
 
 def run(seq):
